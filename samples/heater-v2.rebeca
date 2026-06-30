@@ -1,7 +1,7 @@
 reactiveclass Controller(5){
 	knownrebecs{
             HC_Unit hc_unit;
-            Notifyer notifyer;
+            Meaningless meaningless;
 	}
 	statevars{
 		boolean heating_active;
@@ -12,40 +12,42 @@ reactiveclass Controller(5){
 		sensedValue = 20;
 	}
 	msgsrv getSense(int temp){
+			
+			meaningless.start();
+			meaningless.start2();
+			meaningless.start3();
+			
             sensedValue = temp;
             if (21 > temp && heating_active == false) { 
             	hc_unit.activateh(); //heat 
             	heating_active = true;
-            	notifyer.notify(temp);
             } else if (21 <= temp && heating_active == true) {
             	hc_unit.switchoff(); //switch off the heating process 
             	heating_active = false;
-            	notifyer.notify(temp);
             }         
     }       
 }
-
 reactiveclass Room(5){
 	knownrebecs{
-		Sensor sensor;
+            Sensor sensor;
 	}
 	statevars{
-		int temperature;
-		int outside_air_blowing;
-		int regulation;
-	}
+            int temperature;
+            int outside_air_blowing;
+            int regulation;
+            }
 	Room(){
-		//initial value 
-		temperature = 21; 
-		regulation = 0;
-		outside_air_blowing = 0;
-		self.tempchange(); 
-	}	
-	msgsrv tempchange() { 
-		outside_air_blowing = ?(1,0);
-		temperature = temperature - outside_air_blowing + regulation;
-		sensor.getTemp(temperature);
-		self.tempchange() after(10); 
+            //initial value 
+            temperature = 21; 
+            regulation = 0;
+            outside_air_blowing = 0;
+            self.tempchange(); 
+		}		
+	msgsrv tempchange() { //enviroment effects the temperatue slowly, in each 10 units of time
+            	outside_air_blowing = ?(1,0);
+            	temperature = temperature - outside_air_blowing + regulation;
+            	sensor.getTemp(temperature);
+            	self.tempchange() after(10); 
 	}
 	
 	//regulate temperature
@@ -53,7 +55,6 @@ reactiveclass Room(5){
 		regulation = v;
 	}
 }
-
 reactiveclass Sensor(5){	
 	knownrebecs{
             Room room;
@@ -85,22 +86,80 @@ reactiveclass HC_Unit(5){
 			heater_on = false;
 	}
 	
+	
 }
 
-reactiveclass Notifyer(5){
-	statevars{ int current_status; }
-	Notifyer(){}
-	msgsrv notify(int current_status_){ 
-		current_status = current_status_;
-		send_signal() after(3);
+reactiveclass Meaningless1(5){
+	statevars{ boolean s1; }
+	Meaningless1(){ s1 = false; }
+	msgsrv start(){
+		s1 = ?(false, true);
+		// hand off to next in chain
+		if (s1)
+			meaningless2.start() after(2);
+		else
+			meaningless3.start() after(1);
 	}
-	msgsrv send_signal(){ // current_status is sent }
+	knownrebecs{ Meaningless2 meaningless2; Meaningless3 meaningless3; }
+}
+
+reactiveclass Meaningless2(5){
+	statevars{ boolean s2; }
+	Meaningless2(){ s2 = false; }
+	msgsrv start(){
+		s2 = ?(false, true);
+		// hand off to next in chain
+		meaningless3.start() after(3);
+	}
+	knownrebecs{ Meaningless3 meaningless3; }
+}
+
+reactiveclass Meaningless3(5){
+	statevars{ boolean s3; }
+	Meaningless3(){ s3 = false; }
+	msgsrv start(){ 
+		s3 = !s3;
+	}
+}
+
+reactiveclass Meaningless(5){
+	knownrebecs{
+            Controller controller;
+            Meaningless1 m1;
+	}
+	statevars{
+		boolean pointless;
+	}
+	Meaningless() { pointless = false; }
+
+	msgsrv start(){
+		pointless = true;
+		m1.start() after(1);
+	}
+	msgsrv finish(){
+		pointless = false;
+	}
+	msgsrv start2(){
+		pointless = true;
+		m1.start() after(2);
+	}
+	msgsrv start3(){
+		pointless = true;
+		m1.start() after(3);
+	}
 }
 
 main{
 	Room room(sensor):();
-	Controller controller(hc_unit, notifyer):(); 
-	Sensor sensor(room, controller):();
+	Controller controller(hc_unit, meaningless):(); 
+	Sensor sensor(room,controller):();
 	HC_Unit hc_unit(room):();
-	Notifyer notifyer():();
+
+	// New chain actors (wired new→new only)
+	Meaningless3 meaningless3():();
+	Meaningless2 meaningless2(meaningless3):();
+	Meaningless1 meaningless1(meaningless2, meaningless3):();
+
+	// Existing actor gets a reference to the first new actor (one added knownrebec)
+	Meaningless meaningless(controller, meaningless1):();
 }
