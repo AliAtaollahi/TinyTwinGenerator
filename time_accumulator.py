@@ -1,6 +1,10 @@
-# 1.py
+#!/usr/bin/env python3
+"""Collapse consecutive AUT time transitions into one accumulated transition."""
+
 from __future__ import annotations
-import sys, re
+
+import re
+import sys
 from pathlib import Path
 from typing import List, Tuple, Dict, Set
 PRINT_TIME_PATHS = True
@@ -209,7 +213,7 @@ def process_path(p: Path) -> None:
 
 def main():
     if len(sys.argv) != 2:
-        print("Usage: python 1.py <path_to_.aut_or_folder>")
+        print("Usage: python3 time_accumulator.py <path_to_.aut_or_folder>")
         sys.exit(1)
 
     p = Path(sys.argv[1]).expanduser().resolve()
