@@ -96,7 +96,6 @@ trap 'rm -rf -- "$work_dir"' EXIT
 mkdir -p "$output_dir"
 
 cast_file="$work_dir/cast.aut"
-tau_file="$work_dir/tau.txt"
 raw_file="$work_dir/raw.aut"
 timed_file="$work_dir/timed.aut"
 out_aut="$output_dir/tinytwin.aut"
@@ -105,12 +104,9 @@ out_dot="$output_dir/tinytwin.dot"
 python3 "$script_dir/cast_and_extract.py" \
     "$statespace_file" \
     "$observable_file" \
-    --aut-output "$cast_file" \
-    --tau-output "$tau_file"
+    --aut-output "$cast_file"
 
-tau_actions="$(<"$tau_file")"
-ltsconvert --equivalence=weak-trace --tau="$tau_actions" \
-    "$cast_file" "$raw_file"
+ltsconvert --equivalence=weak-trace "$cast_file" "$raw_file"
 
 python3 "$script_dir/time_accumulator.py" "$raw_file" > "$timed_file"
 

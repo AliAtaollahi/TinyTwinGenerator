@@ -73,7 +73,9 @@ The command expects:
 
 `observable_actions.txt` may contain comma-separated or line-separated action
 fragments. A transition label remains observable when it contains one of those
-fragments. All other labels are hidden before weak-trace reduction.
+fragments. All other transition labels are written as `tau` in the intermediate
+AUT before weak-trace reduction. Writing `tau` directly also handles action
+labels whose data arguments contain commas.
 
 ### Nondeterministic values
 
@@ -128,6 +130,29 @@ The generated DOT uses mCRL2's state numbering and omits redundant explicit
 node labels. The checked-in reference uses different state numbers and writes
 labels such as `label="S0"`, so textual `cmp` is not an appropriate graph
 comparison for sample two.
+
+### Sample 3
+
+The observable-action file for sample three contains:
+
+```text
+open_valve,close_valve,time,(
+```
+
+The final tiny twins therefore contain only:
+
+```text
+v1.open_valve[].[]
+v1.close_valve[].[]
+v2.open_valve[].[]
+v2.close_valve[].[]
+v3.open_valve[].[]
+v3.close_valve[].[]
+time +=10
+```
+
+Actions with comma-containing values, such as
+`sensor.senselevel[1, 1].[]`, are hidden correctly.
 
 ## Help
 

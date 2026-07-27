@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cast a Rebeca state space to AUT and extract its hidden actions."""
+"""Cast a Rebeca state space to AUT and hide its non-observable actions."""
 
 from __future__ import annotations
 
@@ -327,37 +327,33 @@ def read_observable_actions(path: Path) -> List[str]:
     return [item.strip() for item in re.split(r"[,\r\n]+", text) if item.strip()]
 
 
-def hidden_actions(
+def hide_non_observable_actions(
     transitions: Iterable[Transition], observable_actions: Sequence[str]
-) -> List[str]:
-    hidden: List[str] = []
-    seen = set()
-    for _, label, _ in transitions:
-        if any(action in label for action in observable_actions):
-            continue
-        if label not in seen:
-            seen.add(label)
-            hidden.append(label)
-    return hidden
+) -> List[Transition]:
+    """Replace hidden labels in the AUT itself to avoid comma-delimited tau lists."""
+    return [
+        (
+            source,
+            label
+            if any(action in label for action in observable_actions)
+            else "tau",
+            destination,
+        )
+        for source, label, destination in transitions
+    ]
 
 
 def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Cast a Rebeca .statespace file to AUT and extract the labels that "
-            "are not listed as observable."
+            "Cast a Rebeca .statespace file to AUT and replace actions that "
+            "are not listed as observable with tau."
         )
     )
     parser.add_argument("statespace", type=Path)
     parser.add_argument("observable_actions", type=Path)
     parser.add_argument(
         "--aut-output", required=True, type=Path, help="path for the cast AUT file"
-    )
-    parser.add_argument(
-        "--tau-output",
-        required=True,
-        type=Path,
-        help="path for the comma-separated hidden-action list",
     )
     return parser.parse_args(argv)
 
@@ -367,14 +363,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         state_count, transitions = cast_state_space(arguments.statespace)
         observable = read_observable_actions(arguments.observable_actions)
-        hidden = hidden_actions(transitions, observable)
+        transitions = hide_non_observable_actions(transitions, observable)
 
         arguments.aut_output.parent.mkdir(parents=True, exist_ok=True)
-        arguments.tau_output.parent.mkdir(parents=True, exist_ok=True)
         arguments.aut_output.write_text(
             format_aut(state_count, transitions), encoding="utf-8"
         )
-        arguments.tau_output.write_text(",".join(hidden), encoding="utf-8")
     except (OSError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
