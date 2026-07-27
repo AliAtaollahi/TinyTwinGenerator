@@ -8,26 +8,39 @@ reactiveclass PLC1(10){
 	statevars{
 		int T1_level; 
 		int T2_level;
+		boolean T1_fresh;
+		boolean T2_fresh;
 	}
 	PLC1(){
 		T1_level = 1;
 		T2_level = 1;
+		T1_fresh = false;
+		T2_fresh = false;
 	}
 	
 	msgsrv update_plc(int tank_number, int water_level){ 
-		if (tank_number == 1)
+		if (tank_number == 1) {
 			T1_level = water_level;
-		else 
+			T1_fresh = true;
+		} else {
 			T2_level = water_level;
-		if(T1_level == 1 && T2_level == 1) { v1.open_valve(); v2.close_valve(); v3.close_valve(); }
-		else if (T1_level == 1 && T2_level == 2) { v1.open_valve();  v2.close_valve(); v3.close_valve();  }
-		else if (T1_level == 1 && T2_level == 3) { v1.open_valve();  v2.close_valve();  v3.open_valve();  }
-		else if (T1_level == 2 && T2_level == 1) { v1.open_valve();  v2.open_valve(); v3.close_valve();  }
-		else if (T1_level == 2 && T2_level == 2) { v1.open_valve();  v2.open_valve(); v3.close_valve();  }
-		else if (T1_level == 2 && T2_level == 3) { v1.open_valve();  v2.open_valve(); v3.open_valve();  }
-		else if (T1_level == 3 && T2_level == 1) { v1.close_valve(); v2.open_valve(); v3.close_valve();  }
-		else if (T1_level == 3 && T2_level == 2) { v1.close_valve();  v2.open_valve(); v3.close_valve();  }
-		else if (T1_level == 3 && T2_level == 3) { v1.close_valve();  v2.open_valve();  v3.open_valve();  }
+			T2_fresh = true;
+		}
+
+		if (T1_fresh && T2_fresh) {
+			T1_fresh = false;
+			T2_fresh = false;
+
+			if(T1_level == 1 && T2_level == 1) { v1.open_valve(); v2.close_valve(); v3.close_valve(); }
+			else if (T1_level == 1 && T2_level == 2) { v1.open_valve();  v2.close_valve(); v3.close_valve();  }
+			else if (T1_level == 1 && T2_level == 3) { v1.open_valve();  v2.close_valve();  v3.open_valve();  }
+			else if (T1_level == 2 && T2_level == 1) { v1.open_valve();  v2.open_valve(); v3.close_valve();  }
+			else if (T1_level == 2 && T2_level == 2) { v1.open_valve();  v2.open_valve(); v3.close_valve();  }
+			else if (T1_level == 2 && T2_level == 3) { v1.open_valve();  v2.open_valve(); v3.open_valve();  }
+			else if (T1_level == 3 && T2_level == 1) { v1.close_valve(); v2.open_valve(); v3.close_valve();  }
+			else if (T1_level == 3 && T2_level == 2) { v1.close_valve();  v2.open_valve(); v3.close_valve();  }
+			else if (T1_level == 3 && T2_level == 3) { v1.close_valve();  v2.open_valve();  v3.open_valve();  }
+		}
 	}       
 }
 
