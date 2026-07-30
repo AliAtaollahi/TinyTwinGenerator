@@ -16,7 +16,14 @@ from cast_and_extract import (
     hide_non_observable_actions,
     read_observable_actions,
 )
-from lts_reduction import LTS, read_aut, reduce_lts, write_aut, write_dot
+from lts_reduction import (
+    LTS,
+    read_aut,
+    reduce_lts,
+    write_aut,
+    write_aut_preserving_order,
+    write_dot,
+)
 from time_accumulator import accumulate_time
 
 
@@ -79,9 +86,14 @@ def _mcrl2_pipeline(
         raw_path = work / "raw.aut"
         timed_path = work / "timed.aut"
 
-        write_aut(cast_lts, cast_path)
+        # mCRL2's quotient numbering and output edge sequence depend on input
+        # order, so preserve the legacy caster and time-accumulator ordering.
+        write_aut_preserving_order(cast_lts, cast_path)
         _run_ltsconvert(executable, cast_path, raw_path, equivalence)
-        write_aut(accumulate_time(read_aut(raw_path)), timed_path)
+        write_aut_preserving_order(
+            accumulate_time(read_aut(raw_path)),
+            timed_path,
+        )
         _run_ltsconvert(executable, timed_path, output_aut, equivalence)
         _run_ltsconvert(executable, output_aut, output_dot)
 

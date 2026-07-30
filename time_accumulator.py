@@ -10,7 +10,7 @@ import re
 import sys
 from typing import Sequence
 
-from lts_reduction import LTS, canonicalize, read_aut, write_aut
+from lts_reduction import LTS, read_aut, write_aut_preserving_order
 
 
 _TIME_RE = re.compile(r"^\s*time\s*\+=\s*(\d+)\s*$", re.IGNORECASE)
@@ -26,34 +26,53 @@ def accumulate_time(lts: LTS) -> LTS:
 
     A path starts at the initial state or immediately after a non-time action,
     and ends at a state without an outgoing time transition. All non-time
-    transitions are retained. Cyclic time-only paths have no finite terminal
-    duration and are therefore not emitted.
+    transitions are retained in input order, followed by accumulated paths in
+    discovery order. Cyclic time-only paths have no finite terminal duration
+    and are therefore not emitted.
     """
 
-    lts = canonicalize(lts)
     time_out: dict[int, list[tuple[int, int]]] = defaultdict(list)
     time_in_count: dict[int, int] = defaultdict(int)
-    non_time_predecessors: dict[int, set[int]] = defaultdict(set)
-    non_time_transitions: set[tuple[int, str, int]] = set()
+    non_time_predecessors: dict[int, list[int]] = defaultdict(list)
+    non_time_transitions: list[tuple[int, str, int]] = []
 
     for source, label, target in lts.transitions:
         increment = time_increment(label)
         if increment is None:
-            non_time_transitions.add((source, label, target))
-            non_time_predecessors[target].add(source)
+            non_time_transitions.append((source, label, target))
+            non_time_predecessors[target].append(source)
         else:
             time_out[source].append((increment, target))
             time_in_count[target] += 1
 
+    reachable = {lts.initial_state}
+    pending = [lts.initial_state]
+    successors: dict[int, list[int]] = defaultdict(list)
+    for source, _label, target in lts.transitions:
+        successors[source].append(target)
+    while pending:
+        source = pending.pop()
+        for target in successors[source]:
+            if target not in reachable:
+                reachable.add(target)
+                pending.append(target)
+
     entries = [
         state
-        for state in sorted(time_out)
-        if state == lts.initial_state
-        or non_time_predecessors[state]
-        or time_in_count[state] == 0
+        for state in time_out
+        if state in reachable
+        and (
+            state == lts.initial_state
+            or any(
+                predecessor in reachable
+                for predecessor in non_time_predecessors[state]
+            )
+            or time_in_count[state] == 0
+        )
     ]
 
-    accumulated: set[tuple[int, str, int]] = set()
+    accumulated: list[tuple[int, str, int]] = []
+    seen_accumulated: set[tuple[int, int, int]] = set()
 
     def follow(
         start: int,
@@ -63,8 +82,10 @@ def accumulate_time(lts: LTS) -> LTS:
     ) -> None:
         outgoing = time_out.get(state, [])
         if not outgoing:
-            if state != start:
-                accumulated.add((start, f"time +={total}", state))
+            identity = (start, total, state)
+            if state != start and identity not in seen_accumulated:
+                seen_accumulated.add(identity)
+                accumulated.append((start, f"time +={total}", state))
             return
         for increment, target in outgoing:
             if target not in visited:
@@ -77,7 +98,7 @@ def accumulate_time(lts: LTS) -> LTS:
     return LTS.create(
         lts.initial_state,
         lts.num_states,
-        non_time_transitions | accumulated,
+        [*non_time_transitions, *accumulated],
     )
 
 
@@ -95,7 +116,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         result = accumulate_time(read_aut(arguments.input))
         arguments.output.parent.mkdir(parents=True, exist_ok=True)
-        write_aut(result, arguments.output)
+        write_aut_preserving_order(result, arguments.output)
     except (OSError, ValueError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1

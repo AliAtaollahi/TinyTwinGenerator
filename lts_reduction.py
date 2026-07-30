@@ -390,6 +390,13 @@ def read_aut(path: str | Path) -> LTS:
 
 def format_aut(lts: LTS) -> str:
     lts = canonicalize(lts)
+    return format_aut_preserving_order(lts)
+
+
+def format_aut_preserving_order(lts: LTS) -> str:
+    """Format AUT without renumbering or reordering its transitions."""
+
+    _check_lts(lts)
     lines = [
         f"des ({lts.initial_state},{len(lts.transitions)},{lts.num_states})"
     ]
@@ -402,6 +409,13 @@ def format_aut(lts: LTS) -> str:
 
 def write_aut(lts: LTS, path: str | Path) -> None:
     Path(path).write_text(format_aut(lts), encoding="utf-8")
+
+
+def write_aut_preserving_order(lts: LTS, path: str | Path) -> None:
+    Path(path).write_text(
+        format_aut_preserving_order(lts),
+        encoding="utf-8",
+    )
 
 
 def format_dot(lts: LTS) -> str:

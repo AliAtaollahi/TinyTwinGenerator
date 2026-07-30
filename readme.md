@@ -63,6 +63,9 @@ python tinytwin.py \
 ```
 
 In this mode, `ltsconvert` must be available in `PATH`.
+The caster and time accumulator preserve their legacy transition order in this
+mode, so mCRL2 emits the same state numbering and DOT edge order as the earlier
+shell pipeline.
 
 ## Specify an output directory
 
