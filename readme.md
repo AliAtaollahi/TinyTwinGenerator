@@ -143,10 +143,9 @@ as `samples/2/tinytwin.dot`:
 18 transitions
 ```
 
-The generated DOT uses mCRL2's state numbering and omits redundant explicit
-node labels when `--mcrl2` is selected. The built-in implementation uses
-stable breadth-first state numbers. The checked-in reference uses another
-numbering and writes labels such as `label="S0"`, so textual `cmp` is not an
+Both backends normalize their output to stable breadth-first state numbers.
+The checked-in reference uses another numbering and writes labels such as
+`label="S0"`, so textual `cmp` against that older reference is not an
 appropriate graph comparison.
 
 ### Sample 3
@@ -176,12 +175,4 @@ Actions with comma-containing values, such as
 
 ```bash
 python tinytwin.py --help
-```
-
-## Tests
-
-Run the dependency-free test suite with:
-
-```bash
-python -m unittest discover -s tests -v
 ```

@@ -78,12 +78,18 @@ def _mcrl2_pipeline(
         cast_path = work / "cast.aut"
         raw_path = work / "raw.aut"
         timed_path = work / "timed.aut"
+        reduced_path = work / "reduced.aut"
 
         write_aut(cast_lts, cast_path)
         _run_ltsconvert(executable, cast_path, raw_path, equivalence)
         write_aut(accumulate_time(read_aut(raw_path)), timed_path)
-        _run_ltsconvert(executable, timed_path, output_aut, equivalence)
-        _run_ltsconvert(executable, output_aut, output_dot)
+        _run_ltsconvert(executable, timed_path, reduced_path, equivalence)
+
+        # mCRL2 is free to choose different quotient-state numbers. Use the
+        # common serializer so both backends produce stable, identical files.
+        result = reduce_lts(read_aut(reduced_path), equivalence)
+        write_aut(result, output_aut)
+        write_dot(result, output_dot)
 
 
 def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
