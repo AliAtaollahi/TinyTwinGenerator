@@ -3,35 +3,29 @@
 TinyTwinGenerator generates a tiny-twin model from a Rebeca-generated
 `.statespace` file and a comma-separated list of observable actions.
 
-The runtime pipeline consists of only three files:
-
-```text
-generate_tinytwin.sh
-cast_and_extract.py
-time_accumulator.py
-```
-
-Lingua Franca, C/C++, CMake, and Make are not used.
+Run the complete pipeline through `tinytwin.py`. It works on Windows and Linux
+and has built-in weak-trace and weak-bisimulation reductions. Lingua Franca,
+C/C++, CMake, Make, shell scripts, and mCRL2 are not required.
 
 ## Requirements
 
-- Python 3
-- mCRL2's `ltsconvert`
+- Python 3.10 or newer
 
-The sample outputs were verified with:
-
-```text
-Python 3.13.11
-ltsconvert mCRL2 toolset 202407.1 (Release)
-```
+mCRL2's `ltsconvert` is optional. It is used only when `--mcrl2` is supplied.
+The built-in algorithms were checked against mCRL2 toolset 202407.1.
 
 ## Run
 
+Weak trace is the default:
+
 ```bash
-./generate_tinytwin.sh \
+python tinytwin.py \
     samples/1/heater-v1.statespace \
     samples/1/observable_actions.txt
 ```
+
+On Windows, `py tinytwin.py ...` can be used when the Python launcher is
+installed.
 
 The two generated files are:
 
@@ -40,14 +34,42 @@ tinytwin.aut
 tinytwin.dot
 ```
 
-There is no build step.
+There is no build or compile step.
+
+## Choose the equivalence
+
+Use `--equivalence weak-trace` (the default) or
+`--equivalence weak-bisim`:
+
+```bash
+python tinytwin.py \
+    --equivalence weak-bisim \
+    samples/1/heater-v1.statespace \
+    samples/1/observable_actions.txt
+```
+
+The reductions are divergence-insensitive, matching mCRL2's `weak-trace` and
+`weak-bisim` choices.
+
+To explicitly use an installed mCRL2 `ltsconvert` instead of the built-in
+implementation, add `--mcrl2`:
+
+```bash
+python tinytwin.py \
+    --mcrl2 \
+    --equivalence weak-trace \
+    samples/1/heater-v1.statespace \
+    samples/1/observable_actions.txt
+```
+
+In this mode, `ltsconvert` must be available in `PATH`.
 
 ## Specify an output directory
 
 Use `-o` or `--output`:
 
 ```bash
-./generate_tinytwin.sh \
+python tinytwin.py \
     -o output \
     samples/1/heater-v1.statespace \
     samples/1/observable_actions.txt
@@ -60,8 +82,9 @@ output/tinytwin.aut
 output/tinytwin.dot
 ```
 
-Relative input and output paths are resolved from the directory in which the
-command is run. Temporary intermediate AUT files are removed automatically.
+Relative paths are resolved from the directory in which the command is run.
+The built-in pipeline does not create intermediate files. `--mcrl2` uses an
+automatically removed temporary directory.
 
 ## Input files
 
@@ -100,21 +123,15 @@ can also be annotated without a queued-message argument.
 ### Sample 1
 
 All four state-space variants in `samples/1` reduce to the checked-in
-`samples/1/tinytwin.dot`. They can be verified with:
+`samples/1/tinytwin.dot` graph. State numbers may differ because state numbers
+have no semantic meaning.
 
 ```bash
-for input in samples/1/*.statespace; do
-    name="$(basename "$input" .statespace)"
-    ./generate_tinytwin.sh \
-        -o "output/$name" \
-        "$input" \
-        samples/1/observable_actions.txt
-    cmp "output/$name/tinytwin.dot" samples/1/tinytwin.dot
-done
+python tinytwin.py \
+    -o output/heater-v1 \
+    samples/1/heater-v1.statespace \
+    samples/1/observable_actions.txt
 ```
-
-`cmp` prints nothing when a generated file is byte-for-byte identical to the
-reference.
 
 ### Sample 2
 
@@ -127,9 +144,10 @@ as `samples/2/tinytwin.dot`:
 ```
 
 The generated DOT uses mCRL2's state numbering and omits redundant explicit
-node labels. The checked-in reference uses different state numbers and writes
-labels such as `label="S0"`, so textual `cmp` is not an appropriate graph
-comparison for sample two.
+node labels when `--mcrl2` is selected. The built-in implementation uses
+stable breadth-first state numbers. The checked-in reference uses another
+numbering and writes labels such as `label="S0"`, so textual `cmp` is not an
+appropriate graph comparison.
 
 ### Sample 3
 
@@ -157,5 +175,13 @@ Actions with comma-containing values, such as
 ## Help
 
 ```bash
-./generate_tinytwin.sh --help
+python tinytwin.py --help
+```
+
+## Tests
+
+Run the dependency-free test suite with:
+
+```bash
+python -m unittest discover -s tests -v
 ```
