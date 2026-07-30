@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cast a Rebeca state space to AUT and hide its non-observable actions."""
+"""Cast a Rebeca state space to AUT and hide non-observable messages."""
 
 from __future__ import annotations
 
@@ -14,6 +14,11 @@ from typing import Counter, DefaultDict, Dict, Iterable, List, Sequence, Tuple
 
 
 Transition = Tuple[int, str, int]
+_QUALIFIED_MESSAGE_RE = re.compile(
+    r"^[a-z_][a-z0-9_]*\.[a-z_][a-z0-9_]*$",
+    re.IGNORECASE,
+)
+_TIME_LABEL_RE = re.compile(r"^\s*time\s*\+=\s*\d+\s*$", re.IGNORECASE)
 
 
 def state_number(raw_id: str, context: str) -> int:
@@ -322,20 +327,63 @@ def format_aut(state_count: int, transitions: Iterable[Transition]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def read_observable_actions(path: Path) -> List[str]:
+def read_observable_messages(path: Path) -> List[str]:
+    """Read and validate exact ``owner.message`` selectors.
+
+    Message arguments are deliberately absent from a selector. ``time`` is
+    the only unqualified selector because time progress has no message owner.
+    """
+
     text = path.read_text(encoding="utf-8")
-    return [item.strip() for item in re.split(r"[,\r\n]+", text) if item.strip()]
+    messages = [
+        item.strip().lower()
+        for item in re.split(r"[,\r\n]+", text)
+        if item.strip()
+    ]
+    if not messages:
+        raise ValueError(f"Observable-message file is empty: {path}")
+    invalid = [
+        message
+        for message in messages
+        if message != "time"
+        and _QUALIFIED_MESSAGE_RE.fullmatch(message) is None
+    ]
+    if invalid:
+        raise ValueError(
+            "Observable messages must use owner.message format "
+            "(or the reserved entry 'time'): "
+            + ", ".join(invalid)
+        )
+    if len(set(messages)) != len(messages):
+        raise ValueError("Duplicate observable message")
+    return messages
 
 
-def hide_non_observable_actions(
-    transitions: Iterable[Transition], observable_actions: Sequence[str]
+def message_selector(label: str) -> str | None:
+    """Return ``owner.message`` or ``time`` for a generated transition label."""
+
+    if _TIME_LABEL_RE.fullmatch(label):
+        return "time"
+    argument_start = label.find("[")
+    if argument_start < 0:
+        return None
+    selector = label[:argument_start].strip().lower()
+    if _QUALIFIED_MESSAGE_RE.fullmatch(selector) is None:
+        return None
+    return selector
+
+
+def hide_non_observable_messages(
+    transitions: Iterable[Transition], observable_messages: Sequence[str]
 ) -> List[Transition]:
-    """Replace hidden labels in the AUT itself to avoid comma-delimited tau lists."""
+    """Replace every label not selected by exact owner and message with tau."""
+
+    selected = {message.lower() for message in observable_messages}
     return [
         (
             source,
             label
-            if any(action in label for action in observable_actions)
+            if message_selector(label) in selected
             else "tau",
             destination,
         )
@@ -347,11 +395,11 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Cast a Rebeca .statespace file to AUT and replace actions that "
-            "are not listed as observable with tau."
+            "are not listed as observable owner.message entries with tau."
         )
     )
     parser.add_argument("statespace", type=Path)
-    parser.add_argument("observable_actions", type=Path)
+    parser.add_argument("observable_messages", type=Path)
     parser.add_argument(
         "--aut-output", required=True, type=Path, help="path for the cast AUT file"
     )
@@ -362,8 +410,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parse_arguments(argv if argv is not None else sys.argv[1:])
     try:
         state_count, transitions = cast_state_space(arguments.statespace)
-        observable = read_observable_actions(arguments.observable_actions)
-        transitions = hide_non_observable_actions(transitions, observable)
+        observable = read_observable_messages(
+            arguments.observable_messages
+        )
+        transitions = hide_non_observable_messages(
+            transitions,
+            observable,
+        )
 
         arguments.aut_output.parent.mkdir(parents=True, exist_ok=True)
         arguments.aut_output.write_text(

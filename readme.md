@@ -1,7 +1,8 @@
 # TinyTwinGenerator
 
 TinyTwinGenerator generates a tiny-twin model from a Rebeca-generated
-`.statespace` file and a comma-separated list of observable actions.
+`.statespace` file and a comma-separated list of class-qualified observable
+messages.
 
 Run the complete pipeline through `tinytwin.py`. It works on Windows and Linux
 and has built-in weak-trace and weak-bisimulation reductions. Lingua Franca,
@@ -21,7 +22,7 @@ Weak trace is the default:
 ```bash
 python tinytwin.py \
     samples/1/heater-v1.statespace \
-    samples/1/observable_actions.txt
+    samples/1/observable_messages.txt
 ```
 
 On Windows, `py tinytwin.py ...` can be used when the Python launcher is
@@ -45,7 +46,7 @@ Use `--equivalence weak-trace` (the default) or
 python tinytwin.py \
     --equivalence weak-bisim \
     samples/1/heater-v1.statespace \
-    samples/1/observable_actions.txt
+    samples/1/observable_messages.txt
 ```
 
 The reductions are divergence-insensitive, matching mCRL2's `weak-trace` and
@@ -59,7 +60,7 @@ python tinytwin.py \
     --mcrl2 \
     --equivalence weak-trace \
     samples/1/heater-v1.statespace \
-    samples/1/observable_actions.txt
+    samples/1/observable_messages.txt
 ```
 
 In this mode, `ltsconvert` must be available in `PATH`.
@@ -75,7 +76,7 @@ Use `-o` or `--output`:
 python tinytwin.py \
     -o output \
     samples/1/heater-v1.statespace \
-    samples/1/observable_actions.txt
+    samples/1/observable_messages.txt
 ```
 
 This writes:
@@ -94,14 +95,22 @@ automatically removed temporary directory.
 The command expects:
 
 ```text
-<input.statespace> <observable_actions.txt>
+<input.statespace> <observable_messages.txt>
 ```
 
-`observable_actions.txt` may contain comma-separated or line-separated action
-fragments. A transition label remains observable when it contains one of those
-fragments. All other transition labels are written as `tau` in the intermediate
-AUT before weak-trace reduction. Writing `tau` directly also handles action
-labels whose data arguments contain commas.
+`observable_messages.txt` may contain comma-separated or line-separated
+entries. Every message entry must use the exact `owner.message` form, such as
+`controller.getsense`. Matching is case-insensitive and ignores data arguments.
+The reserved entry `time` selects time-progress transitions.
+
+The owner qualifier is required. Therefore, selecting `first.update` does not
+also expose `second.update` when two reactive classes or rebec instances define
+the same message name. Ambiguous unqualified entries such as `update` are
+rejected instead of silently matching both classes.
+
+All unselected transition labels are written as `tau` in the intermediate AUT
+before reduction. Writing `tau` directly also handles action labels whose data
+arguments contain commas.
 
 ### Nondeterministic values
 
@@ -133,7 +142,7 @@ have no semantic meaning.
 python tinytwin.py \
     -o output/heater-v1 \
     samples/1/heater-v1.statespace \
-    samples/1/observable_actions.txt
+    samples/1/observable_messages.txt
 ```
 
 ### Sample 2
@@ -154,10 +163,10 @@ appropriate graph comparison.
 
 ### Sample 3
 
-The observable-action file for sample three contains:
+The observable-message file for sample three contains:
 
 ```text
-open_valve,close_valve,time,(
+v1.open_valve,v1.close_valve,v2.open_valve,v2.close_valve,v3.open_valve,v3.close_valve,time
 ```
 
 The final tiny twins therefore contain only:

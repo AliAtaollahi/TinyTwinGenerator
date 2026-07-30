@@ -13,8 +13,8 @@ from typing import Sequence
 
 from cast_and_extract import (
     cast_state_space,
-    hide_non_observable_actions,
-    read_observable_actions,
+    hide_non_observable_messages,
+    read_observable_messages,
 )
 from lts_reduction import (
     LTS,
@@ -30,10 +30,10 @@ from time_accumulator import accumulate_time
 EQUIVALENCES = ("weak-trace", "weak-bisim")
 
 
-def _cast(statespace: Path, observable_actions: Path) -> LTS:
+def _cast(statespace: Path, observable_messages: Path) -> LTS:
     state_count, transitions = cast_state_space(statespace)
-    observable = read_observable_actions(observable_actions)
-    hidden = hide_non_observable_actions(transitions, observable)
+    observable = read_observable_messages(observable_messages)
+    hidden = hide_non_observable_messages(transitions, observable)
     return LTS.create(0, state_count, hidden)
 
 
@@ -106,7 +106,13 @@ def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
         )
     )
     parser.add_argument("statespace", type=Path)
-    parser.add_argument("observable_actions", type=Path)
+    parser.add_argument(
+        "observable_messages",
+        type=Path,
+        help=(
+            "file containing exact owner.message selectors and optionally time"
+        ),
+    )
     parser.add_argument(
         "-o",
         "--output",
@@ -136,16 +142,19 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ValueError(
                 f"state-space file not found: {arguments.statespace}"
             )
-        if not arguments.observable_actions.is_file():
+        if not arguments.observable_messages.is_file():
             raise ValueError(
-                "observable-actions file not found: "
-                f"{arguments.observable_actions}"
+                "observable-messages file not found: "
+                f"{arguments.observable_messages}"
             )
 
         arguments.output.mkdir(parents=True, exist_ok=True)
         output_aut = arguments.output / "tinytwin.aut"
         output_dot = arguments.output / "tinytwin.dot"
-        cast_lts = _cast(arguments.statespace, arguments.observable_actions)
+        cast_lts = _cast(
+            arguments.statespace,
+            arguments.observable_messages,
+        )
 
         if arguments.mcrl2:
             _mcrl2_pipeline(
