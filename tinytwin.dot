@@ -3,8 +3,7 @@ center = TRUE;
 mclimit = 10.0;
 nodesep = 0.05;
 node [ width=0.25, height=0.25, label="" ];
-S35 [ peripheries=2 ];
-S0
+S0 [ peripheries=2 ];
 S1
 S2
 S3
@@ -20,115 +19,22 @@ S12
 S13
 S14
 S15
-S16
-S17
-S18
-S19
-S20
-S21
-S22
-S23
-S24
-S25
-S26
-S27
-S28
-S29
-S30
-S31
-S32
-S33
-S34
-S35
-S36
-S37
-S37 -> S5[label="v2.close_valve[].[]"];
-S0 -> S6[label="v2.close_valve[].[]"];
-S0 -> S37[label="v1.open_valve[].[]"];
-S34 -> S5[label="v3.close_valve[].[]"];
-S33 -> S12[label="v3.close_valve[].[]"];
-S32 -> S1[label="v3.close_valve[].[]"];
-S26 -> S6[label="v3.close_valve[].[]"];
-S26 -> S34[label="v1.open_valve[].[]"];
-S25 -> S13[label="v3.close_valve[].[]"];
-S25 -> S32[label="v1.open_valve[].[]"];
-S24 -> S2[label="v3.close_valve[].[]"];
-S24 -> S33[label="v1.open_valve[].[]"];
-S35 -> S26[label="v2.close_valve[].[]"];
-S35 -> S0[label="v3.close_valve[].[]"];
-S35 -> S22[label="v1.open_valve[].[]"];
-S22 -> S37[label="v3.close_valve[].[]"];
-S22 -> S34[label="v2.close_valve[].[]"];
-S29 -> S1[label="v2.open_valve[].[]"];
-S19 -> S28[label="v2.open_valve[].[]"];
-S20 -> S1[label="v2.open_valve[].[]"];
-S20 -> S12[label="v2.close_valve[].[]"];
-S18 -> S13[label="v2.open_valve[].[]"];
-S18 -> S2[label="v2.close_valve[].[]"];
-S18 -> S20[label="v1.open_valve[].[]"];
-S23 -> S25[label="v2.open_valve[].[]"];
-S23 -> S18[label="v3.close_valve[].[]"];
-S23 -> S24[label="v2.close_valve[].[]"];
-S23 -> S16[label="v1.open_valve[].[]"];
-S16 -> S20[label="v3.close_valve[].[]"];
-S16 -> S32[label="v2.open_valve[].[]"];
-S16 -> S33[label="v2.close_valve[].[]"];
-S36 -> S3[label="v2.open_valve[].[]"];
-S36 -> S19[label="v1.close_valve[].[]"];
-S36 -> S29[label="v1.open_valve[].[]"];
-S10 -> S19[label="v1.close_valve[].[]"];
-S10 -> S3[label="v2.open_valve[].[]"];
-S10 -> S2[label="v2.close_valve[].[]"];
-S10 -> S20[label="v1.open_valve[].[]"];
-S31 -> S28[label="v3.open_valve[].[]"];
-S31 -> S28[label="v3.close_valve[].[]"];
-S9 -> S1[label="v3.open_valve[].[]"];
-S9 -> S1[label="v3.close_valve[].[]"];
-S15 -> S12[label="v3.open_valve[].[]"];
-S15 -> S12[label="v3.close_valve[].[]"];
-S8 -> S3[label="v3.open_valve[].[]"];
-S8 -> S31[label="v1.close_valve[].[]"];
-S8 -> S3[label="v3.close_valve[].[]"];
-S8 -> S9[label="v1.open_valve[].[]"];
-S14 -> S13[label="v3.open_valve[].[]"];
-S14 -> S13[label="v3.close_valve[].[]"];
-S14 -> S9[label="v1.open_valve[].[]"];
-S7 -> S2[label="v3.open_valve[].[]"];
-S7 -> S2[label="v3.close_valve[].[]"];
-S7 -> S15[label="v1.open_valve[].[]"];
-S17 -> S14[label="v2.open_valve[].[]"];
-S17 -> S18[label="v3.open_valve[].[]"];
-S17 -> S18[label="v3.close_valve[].[]"];
-S17 -> S21[label="v1.open_valve[].[]"];
-S17 -> S7[label="v2.close_valve[].[]"];
-S30 -> S9[label="v2.open_valve[].[]"];
-S30 -> S29[label="v3.open_valve[].[]"];
-S30 -> S29[label="v3.close_valve[].[]"];
-S4 -> S19[label="v3.close_valve[].[]"];
-S4 -> S19[label="v3.open_valve[].[]"];
-S4 -> S31[label="v2.open_valve[].[]"];
-S21 -> S20[label="v3.open_valve[].[]"];
-S21 -> S9[label="v2.open_valve[].[]"];
-S21 -> S20[label="v3.close_valve[].[]"];
-S21 -> S15[label="v2.close_valve[].[]"];
-S27 -> S36[label="v3.close_valve[].[]"];
-S27 -> S8[label="v2.open_valve[].[]"];
-S27 -> S4[label="v1.close_valve[].[]"];
-S27 -> S36[label="v3.open_valve[].[]"];
-S27 -> S30[label="v1.open_valve[].[]"];
-S11 -> S4[label="v1.close_valve[].[]"];
-S11 -> S8[label="v2.open_valve[].[]"];
-S11 -> S21[label="v1.open_valve[].[]"];
-S11 -> S7[label="v2.close_valve[].[]"];
-S11 -> S10[label="v3.close_valve[].[]"];
-S11 -> S10[label="v3.open_valve[].[]"];
-S13 -> S1[label="v1.open_valve[].[]"];
-S2 -> S12[label="v1.open_valve[].[]"];
-S6 -> S5[label="v1.open_valve[].[]"];
-S3 -> S1[label="v1.open_valve[].[]"];
-S3 -> S28[label="v1.close_valve[].[]"];
-S28 -> S27[label="time +=10"];
-S1 -> S11[label="time +=10"];
-S12 -> S17[label="time +=10"];
-S5 -> S23[label="time +=10"];
+S0 -> S1[label="room.tempchange[20].[]"];
+S0 -> S2[label="room.tempchange[21].[]"];
+S1 -> S3[label="sensor.gettemp[20].[]"];
+S2 -> S4[label="sensor.gettemp[21].[]"];
+S3 -> S5[label="controller.getsense[20].[]"];
+S4 -> S6[label="controller.getsense[21].[]"];
+S5 -> S7[label="hc_unit.activateh[].[]"];
+S6 -> S0[label="time +=10"];
+S7 -> S8[label="room.regulate[1].[]"];
+S8 -> S9[label="time +=10"];
+S9 -> S10[label="room.tempchange[20].[]"];
+S9 -> S11[label="room.tempchange[21].[]"];
+S10 -> S12[label="sensor.gettemp[20].[]"];
+S11 -> S13[label="sensor.gettemp[21].[]"];
+S12 -> S8[label="controller.getsense[20].[]"];
+S13 -> S14[label="controller.getsense[21].[]"];
+S14 -> S15[label="hc_unit.switchoff[].[]"];
+S15 -> S6[label="room.regulate[0].[]"];
 }
