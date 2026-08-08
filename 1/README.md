@@ -94,8 +94,9 @@ on the safety path.
 | 5 | recording | `ScadaLogger`, `ConditionMonitor` | **SINK — removable** |
 
 `ShutdownSequencer` additionally sends `feather` into subtree 2 and `openBreaker` into subtree 1. Those two
-edges are the only ones in the model that cross a subtree boundary, and they are drawn in bold dark red
-in the diagram.
+edges are the only ones in the model that cross a subtree boundary — in the diagram they are the two
+arrows that leave `ShutdownSequencer` sideways into `PitchActuator` and `ConverterDriver`, the only
+lines that do not stay inside their own chain.
 
 Two details worth knowing, both of which are the sort of thing that quietly ruins a model:
 
@@ -231,7 +232,10 @@ Three naming notes, all of them forced by the tooling and all of them improvemen
   observable set that selected `brake.apply`.
 - `PitchActuator.release` became `restorePitch` for the same reason.
 
-The diagram was drawn with Graphviz for this repository.
+`diagram.png` is not hand-drawn: it is the Lingua Franca diagram of `model.lf`, generated straight from
+the source with `lfd model.lf` (the diagram generator shipped in the Lingua Franca CLI, the same
+synthesis the VS Code extension shows). `model.svg` is that diagram as vector. Both are regenerated
+from the model, so they cannot drift out of step with it.
 
 ## The Lingua Franca version
 
@@ -276,6 +280,5 @@ t=13000000  OBSERVABLE  setAngle(3)
 t=13000000  OBSERVABLE  applyTorque(0)
 ```
 
-> **`model.svg` is stale.** It was exported from the Lingua Franca VS Code extension before the port
-> renames above, so it still shows `apply`, `release` and `tripOff`. Re-export it to bring it back in
-> step; nothing else in the folder depends on it.
+`diagram.png` and `model.svg` are both regenerated from `model.lf` with `lfd`, so the port renames
+above are already reflected in them.

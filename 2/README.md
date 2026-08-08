@@ -40,8 +40,9 @@ WiperLogic --wiperActive--> LightingLogic
 
 When the wipers start, the low beam must come on. That is a real rule, not a modelling convenience:
 several US states require headlights whenever the windscreen wipers are in use, and the equivalent
-exists in a number of European markets. It is drawn in bold dark red in the diagram, and it is the
-`a3 -> b2` edge of the abstract topology in `model.dot`.
+exists in a number of European markets. In the diagram it is the one arrow that leaves its own row —
+`WiperLogic.wiperActive` reaching down into `LightingLogic` — and it is the `a3 -> b2` edge of the
+abstract topology in `model.dot`.
 
 Everything else is a peripheral in its own right. Branch D never looks at branch G; branch E never
 looks at anything.
@@ -206,6 +207,13 @@ Two naming notes, both forced by keeping the two files in step:
 - No message name is a substring of another. That matters more than it looks: the tiny-twin caster
   identifies a transition's arguments by searching the source state's queued messages for the
   message name, so a name like `apply` inside `applyTorque` silently attaches the wrong arguments.
+
+`diagram.png` is not hand-drawn: it is the Lingua Franca diagram of `model.lf`, generated straight from
+the source with `lfd model.lf` (the diagram generator shipped in the Lingua Franca CLI, the same
+synthesis the VS Code extension shows). `model.svg` is that diagram as vector. Because both come out of
+the model they cannot drift out of step with it — which is also why the eight branches show up as eight
+separate rows with nothing between them, and `model.dot` is kept alongside for the *abstract* topology
+with the periods and the roles marked on it.
 
 ## The Lingua Franca version
 
