@@ -1,0 +1,126 @@
+digraph ComputationTopology2 {
+  graph [
+    label="Topology 2: wide periodic fan-out with one peer dependency\lRealised as sample 2, the automotive body control module.\l",
+    labelloc=t,
+    labeljust=l,
+    rankdir=TB,
+    bgcolor="white",
+    pad=0.3,
+    nodesep=0.55,
+    ranksep=1.0,
+    splines=polyline
+  ];
+
+  node [shape=box, style="rounded,filled", fillcolor="white", color="#475569",
+        penwidth=1.1, fontname="Arial", fontsize=10, margin="0.10,0.06"];
+  edge [color="#64748B", penwidth=1.0, arrowsize=0.7,
+        fontname="Arial", fontsize=9];
+
+  main [label="main", fillcolor="#CBD5E1", color="#1E293B", penwidth=1.8,
+        fontsize=12, width=1.0, height=0.5];
+
+  // Each module is one branch: a peripheral polled on its own period, the
+  // function logic, and the load. Node 1 carries the period; node 3 is the
+  // load. `rank=same` alone lets Graphviz reorder siblings, so each chain is
+  // also pinned with an explicit group.
+
+  subgraph cluster_a {
+    label="Module A - wipers"; style="rounded,filled"; color="#334155"; fillcolor="#F8FAFC";
+    a1 [label="RainSensor", group=a]; a2 [label="WiperLogic", group=a]; a3 [label="WiperMotor", group=a];
+    { rank=same; a1; a2; a3; }
+    a1 -> a2; a2 -> a3;
+    a1 -> a1 [label="periodic 16", color="#D97706", fontcolor="#D97706",
+              style=dotted, constraint=false];
+  }
+  subgraph cluster_b {
+    label="Module B - exterior lighting"; style="rounded,filled"; color="#334155"; fillcolor="#F8FAFC";
+    b1 [label="LightSensor", group=b]; b2 [label="LightingLogic", group=b]; b3 [label="Headlamps", group=b];
+    { rank=same; b1; b2; b3; }
+    b1 -> b2; b2 -> b3;
+    b1 -> b1 [label="periodic 12", color="#D97706", fontcolor="#D97706",
+              style=dotted, constraint=false];
+  }
+  subgraph cluster_c {
+    label="Module C - central locking"; style="rounded,filled"; color="#334155"; fillcolor="#F8FAFC";
+    c1 [label="KeyFob", group=c]; c2 [label="LockLogic", group=c]; c3 [label="DoorLatch", group=c];
+    { rank=same; c1; c2; c3; }
+    c1 -> c2; c2 -> c3;
+    c1 -> c1 [label="periodic 24", color="#D97706", fontcolor="#D97706",
+              style=dotted, constraint=false];
+  }
+  subgraph cluster_d {
+    label="Module D - power window  (OBSERVABLE)"; style="rounded,filled";
+    color="#C00000"; fillcolor="#FEF2F2"; penwidth=1.8;
+    d1 [label="WindowSwitch", group=d]; d2 [label="WindowLogic", group=d];
+    d3 [label="WindowMotor", group=d, color="#C00000", penwidth=1.8];
+    { rank=same; d1; d2; d3; }
+    // internal fan-out: the switch emits the anti-pinch reading and the
+    // rocker command at the same instant, and they race
+    d1 -> d2 [label="winPinch"]; d1 -> d2 [label="winCmd"]; d2 -> d3 [label="glassCmd"];
+    d1 -> d1 [label="periodic 8", color="#D97706", fontcolor="#D97706",
+              style=dotted, constraint=false];
+  }
+  subgraph cluster_e {
+    label="Module E - mirror heating"; style="rounded,filled"; color="#334155"; fillcolor="#F8FAFC";
+    e1 [label="MirrorTempSensor", group=e]; e2 [label="MirrorHeatLogic", group=e]; e3 [label="MirrorHeater", group=e];
+    { rank=same; e1; e2; e3; }
+    e1 -> e2; e2 -> e3;
+    e1 -> e1 [label="periodic 48", color="#D97706", fontcolor="#D97706",
+              style=dotted, constraint=false];
+  }
+  subgraph cluster_f {
+    label="Module F - interior lamp"; style="rounded,filled"; color="#334155"; fillcolor="#F8FAFC";
+    f1 [label="DoorAjarSwitch", group=f]; f2 [label="DomeLampLogic", group=f]; f3 [label="DomeLamp", group=f];
+    { rank=same; f1; f2; f3; }
+    f1 -> f2; f2 -> f3;
+    f1 -> f1 [label="periodic 16", color="#D97706", fontcolor="#D97706",
+              style=dotted, constraint=false];
+    // a second rhythm inside the branch: the theatre-dimming fade
+    f2 -> f2 [label="periodic 4", color="#D97706", fontcolor="#D97706",
+              style=dotted, constraint=false];
+  }
+  subgraph cluster_g {
+    label="Module G - blower"; style="rounded,filled"; color="#334155"; fillcolor="#F8FAFC";
+    g1 [label="CabinTempSensor", group=g]; g2 [label="BlowerLogic", group=g]; g3 [label="Blower", group=g];
+    { rank=same; g1; g2; g3; }
+    g1 -> g2; g2 -> g3;
+    g1 -> g1 [label="periodic 24", color="#D97706", fontcolor="#D97706",
+              style=dotted, constraint=false];
+  }
+  subgraph cluster_h {
+    label="Module H - alarm"; style="rounded,filled"; color="#334155"; fillcolor="#F8FAFC";
+    h1 [label="TiltSensor", group=h]; h2 [label="AlarmLogic", group=h]; h3 [label="Horn", group=h];
+    { rank=same; h1; h2; h3; }
+    h1 -> h2; h2 -> h3;
+    h1 -> h1 [label="periodic 48", color="#D97706", fontcolor="#D97706",
+              style=dotted, constraint=false];
+  }
+
+  // The removable module. It reads from four branches and commands nothing.
+  subgraph cluster_x {
+    label="Module X - OBD-II tester  (REMOVABLE)"; style="rounded,filled,dashed";
+    color="#A02BA0"; fillcolor="#FDF4FD";
+    x1 [label="DiagLogger", color="#A02BA0"];
+  }
+
+  // Eight independent top-level branches, started by main. In Timed Rebeca
+  // `main` only instantiates: these are not messages, which is why they are
+  // drawn thin and grey.
+  edge [color="#94A3B8", penwidth=1.0, style=solid, arrowhead=empty];
+  main -> a1; main -> b1; main -> c1; main -> d1;
+  main -> e1; main -> f1; main -> g1; main -> h1;
+  main -> x1;
+
+  // The ONLY dependency between sibling modules: in most jurisdictions the
+  // low beam must be on whenever the wipers are running.
+  a2 -> b2 [label="wiperActive",
+            color="#8B0000", fontcolor="#8B0000", style=bold,
+            penwidth=1.8, arrowhead=normal, constraint=false];
+
+  // Into the removable sink.
+  edge [color="#A02BA0", style=dashed, penwidth=1.0, arrowhead=normal];
+  a1 -> x1 [constraint=false];
+  b2 -> x1 [constraint=false];
+  c2 -> x1 [constraint=false];
+  h1 -> x1 [constraint=false];
+}

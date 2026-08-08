@@ -1,0 +1,550 @@
+/**
+ * Automotive body control module (BCM).
+ *
+ * Lingua Franca version of model.rebeca.
+ *
+ * This is the WIDE PERIODIC FAN-OUT case study. Eight body functions hang off
+ * one controller. Each owns a peripheral polled on its own period, a piece of
+ * logic, and a load, and the eight branches are independent of one another
+ * with exactly ONE exception:
+ *
+ *   A wipers        RainSensor(16)        -> WiperLogic      -> WiperMotor
+ *   B lighting      LightSensor(12)       -> LightingLogic   -> Headlamps
+ *   C central lock  KeyFob(24)            -> LockLogic       -> DoorLatch
+ *   D power window  WindowSwitch(8)       -> WindowLogic     -> WindowMotor
+ *   E mirror heat   MirrorTempSensor(48)  -> MirrorHeatLogic -> MirrorHeater
+ *   F interior lamp DoorAjarSwitch(16)    -> DomeLampLogic   -> DomeLamp
+ *   G blower        CabinTempSensor(24)   -> BlowerLogic     -> Blower
+ *   H alarm         TiltSensor(48)        -> AlarmLogic      -> Horn
+ *
+ *   WiperLogic.wiperActive -> LightingLogic     the one peer dependency:
+ *   in most jurisdictions the low beam must be on whenever the wipers run.
+ *
+ * In the reactor diagram the eight chains are visibly disjoint and run left to
+ * right, with a single edge crossing from A into B and a single removable sink
+ * (the OBD-II diagnostic logger) collecting from four of them.
+ *
+ * Six distinct rates: 8, 12, 16, 24, 48 ms for the peripherals, plus a 4 ms
+ * fade inside the interior-lamp branch.
+ *
+ * The graph is acyclic. Nothing a load does feeds back into a sensor inside
+ * the model: the glass moving, the lamp lighting and the mirror warming are
+ * physics, and they close outside the model boundary. So there is no delay and
+ * no cycle-breaking reaction order. Two zero- and 4 ms self-messages in the
+ * Rebeca model become logical actions here.
+ *
+ * ONE DELIBERATE DIFFERENCE FROM THE REBECA MODEL. WindowSwitch emits the
+ * anti-pinch reading and the rocker command at the same instant. Rebeca puts
+ * both in a bag, so their order is a genuine race and the state space explores
+ * both. Lingua Franca is deterministic, so WindowLogic declares the winPinch
+ * reaction first and the guard is always applied before the command. The LF
+ * run is therefore one of the interleavings the Rebeca model admits.
+ *
+ * A line "// M: <code>" means: to build M, replace the line that follows it
+ * with <code>. Everything else is deleted by removing the lines and blocks
+ * marked OPTIONAL.
+ */
+target C {
+  timeout: 200 ms
+}
+
+// ============================== A  WIPERS ====================================
+
+reactor RainSensor(period: time = 16 ms) {
+  timer t(0, period)
+  output rainLevel: int
+  output noteRain: int              // OPTIONAL
+  state pattern: int = 0
+
+  // M: reaction(t) -> rainLevel {=
+  reaction(t) -> rainLevel, noteRain {=
+    // Rebeca writes  rain = ?(0, 1, 2)  -- a nondeterministic choice.
+    // Lingua Franca is deterministic, so the three choices are enumerated.
+    // 0 = dry, 1 = intermittent, 2 = continuous.
+    static const int choices[3] = {0, 1, 2};
+    self->pattern = (self->pattern + 1) % 3;
+    lf_set(rainLevel, choices[self->pattern]);
+    lf_set(noteRain,  choices[self->pattern]);   // OPTIONAL
+  =}
+}
+
+reactor WiperLogic {
+  input rainLevel: int
+  output wiperCmd: int
+  output wiperStop: bool
+  output wiperActive: int
+  state wiperMode: int = 0
+
+  reaction(rainLevel) -> wiperCmd, wiperStop, wiperActive {=
+    int level = rainLevel->value;
+    // The motor command is refreshed every cycle, the way a real wiper
+    // command is re-sent over LIN rather than latched once.
+    if (level == 0) lf_set(wiperStop, true);
+    else            lf_set(wiperCmd, level);
+    // The one edge that leaves this branch, sent only on a real change.
+    if (level != self->wiperMode) {
+      self->wiperMode = level;
+      lf_set(wiperActive, self->wiperMode);
+    }
+  =}
+}
+
+reactor WiperMotor {
+  input wiperCmd: int
+  input wiperStop: bool
+  state sweeping: int = 0
+
+  reaction(wiperCmd) {=
+    self->sweeping = wiperCmd->value;
+    lf_print("t=%lld  OBSERVABLE  wiperCmd(%d)",
+             (long long) lf_time_logical_elapsed(), self->sweeping);
+  =}
+
+  reaction(wiperStop) {=
+    self->sweeping = 0;
+    lf_print("t=%lld  OBSERVABLE  wiperStop",
+             (long long) lf_time_logical_elapsed());
+  =}
+}
+
+// ============================= B  LIGHTING ===================================
+
+reactor LightSensor(period: time = 12 ms) {
+  timer t(1 ms, period)
+  output ambientLevel: int
+  state lux: int = 3
+
+  reaction(t) -> ambientLevel {=
+    // dusk, night, dawn, day and round again
+    self->lux = (self->lux == 0) ? 3 : self->lux - 1;
+    lf_set(ambientLevel, self->lux);
+  =}
+}
+
+reactor LightingLogic {
+  input ambientLevel: int
+  input wiperActive: int
+  logical action decide
+  output beamCmd: int
+  output noteBeam: int              // OPTIONAL
+  state lux: int = 3
+  state wipers: int = 0
+  state beam: int = 0
+
+  // `self.decide()` in Rebeca is a zero-delay self-message; here it is a
+  // logical action, so it lands at the next microstep and is not a cycle.
+  reaction(ambientLevel) -> decide {=
+    self->lux = ambientLevel->value;
+    lf_schedule(decide, 0);
+  =}
+
+  reaction(wiperActive) -> decide {=
+    self->wipers = wiperActive->value;
+    lf_schedule(decide, 0);
+  =}
+
+  // M: reaction(decide) -> beamCmd {=
+  reaction(decide) -> beamCmd, noteBeam {=
+    int want = 0;
+    if (self->lux <= 1)    want = 1;   // dark enough on its own
+    if (self->wipers > 0)  want = 1;   // wipers running: low beam is required
+    if (want != self->beam) {
+      self->beam = want;
+      lf_set(beamCmd, self->beam);
+      lf_set(noteBeam, self->beam);    // OPTIONAL
+    }
+  =}
+}
+
+reactor Headlamps {
+  input beamCmd: int
+  state beam: int = 0
+
+  reaction(beamCmd) {=
+    self->beam = beamCmd->value;
+    lf_print("t=%lld  OBSERVABLE  beamCmd(%d)",
+             (long long) lf_time_logical_elapsed(), self->beam);
+  =}
+}
+
+// ========================== C  CENTRAL LOCKING ===============================
+
+reactor KeyFob(period: time = 24 ms) {
+  timer t(2 ms, period)
+  output fobCmd: int
+  state pattern: int = 0
+
+  reaction(t) -> fobCmd {=
+    // Rebeca writes  press = ?(0, 1).  0 = unlock, 1 = lock.
+    static const int choices[2] = {0, 1};
+    self->pattern = (self->pattern + 1) % 2;
+    lf_set(fobCmd, choices[self->pattern]);
+  =}
+}
+
+reactor LockLogic {
+  input fobCmd: int
+  output boltCmd: int
+  output noteBolt: int              // OPTIONAL
+  state locked: int = 0
+
+  // M: reaction(fobCmd) -> boltCmd {=
+  reaction(fobCmd) -> boltCmd, noteBolt {=
+    if (fobCmd->value != self->locked) {
+      self->locked = fobCmd->value;
+      lf_set(boltCmd, self->locked);
+      lf_set(noteBolt, self->locked);          // OPTIONAL
+    }
+  =}
+}
+
+reactor DoorLatch {
+  input boltCmd: int
+  state bolt: int = 0
+
+  reaction(boltCmd) {=
+    self->bolt = boltCmd->value;
+    lf_print("t=%lld  OBSERVABLE  boltCmd(%d)",
+             (long long) lf_time_logical_elapsed(), self->bolt);
+  =}
+}
+
+// =========================== D  POWER WINDOW =================================
+
+reactor WindowSwitch(period: time = 8 ms) {
+  timer t(3 ms, period)
+  output winPinch: int
+  output winCmd: int
+  state rocker: int = 0
+  state pattern: int = 0
+
+  reaction(t) -> winPinch, winCmd {=
+    // The rocker is a person: released, up, down, round again.
+    self->rocker = (self->rocker == 2) ? 0 : self->rocker + 1;
+    // What is NOT predictable is whether something is in the window frame.
+    // Rebeca writes  obstruction = ?(0, 1).
+    static const int choices[2] = {0, 1};
+    self->pattern = (self->pattern + 1) % 2;
+    lf_set(winPinch, choices[self->pattern]);
+    lf_set(winCmd, self->rocker);
+  =}
+}
+
+reactor WindowLogic {
+  input winPinch: int
+  input winCmd: int
+  output glassCmd: int
+  state height: int = 1
+  state drive: int = 0
+  state blocked: int = 0
+
+  // Declared first, so anti-pinch is applied before the rocker command.
+  reaction(winPinch) {= self->blocked = winPinch->value; =}
+
+  // End-stop protection: the motor is not driven into a closed or fully open
+  // window, which is what stalls a real window motor. Anti-pinch wins over
+  // everything.
+  reaction(winCmd) -> glassCmd {=
+    self->drive = winCmd->value;
+    if (self->blocked == 1) self->drive = 0;
+    if (self->drive == 1) {
+      if (self->height == 2) self->drive = 0; else self->height++;
+    }
+    if (self->drive == 2) {
+      if (self->height == 0) self->drive = 0; else self->height--;
+    }
+    lf_set(glassCmd, self->drive);
+  =}
+}
+
+reactor WindowMotor {
+  input glassCmd: int
+  state drive: int = 0
+
+  reaction(glassCmd) {=
+    self->drive = glassCmd->value;
+    lf_print("t=%lld  OBSERVABLE  glassCmd(%d)",
+             (long long) lf_time_logical_elapsed(), self->drive);
+  =}
+}
+
+// ============================ E  MIRROR HEAT =================================
+
+reactor MirrorTempSensor(period: time = 48 ms) {
+  timer t(4 ms, period)
+  output mirTemp: int
+  state outside: int = 2
+
+  reaction(t) -> mirTemp {=
+    self->outside = (self->outside == 0) ? 3 : self->outside - 1;
+    lf_set(mirTemp, self->outside);
+  =}
+}
+
+reactor MirrorHeatLogic {
+  input mirTemp: int
+  output mirCmd: int
+  state heating: int = 0
+
+  // Hysteresis: on below freezing, off once it is properly warm.
+  reaction(mirTemp) -> mirCmd {=
+    int outside = mirTemp->value;
+    if (outside <= 1 && self->heating == 0) {
+      self->heating = 1;
+      lf_set(mirCmd, 1);
+    }
+    if (outside >= 3 && self->heating == 1) {
+      self->heating = 0;
+      lf_set(mirCmd, 0);
+    }
+  =}
+}
+
+reactor MirrorHeater {
+  input mirCmd: int
+  state element: int = 0
+
+  reaction(mirCmd) {=
+    self->element = mirCmd->value;
+    lf_print("t=%lld  OBSERVABLE  mirCmd(%d)",
+             (long long) lf_time_logical_elapsed(), self->element);
+  =}
+}
+
+// ========================== F  INTERIOR LAMP =================================
+
+reactor DoorAjarSwitch(period: time = 16 ms) {
+  timer t(5 ms, period)
+  output ajarLevel: int
+  state ajar: int = 0
+
+  reaction(t) -> ajarLevel {=
+    self->ajar = (self->ajar == 0) ? 1 : 0;
+    lf_set(ajarLevel, self->ajar);
+  =}
+}
+
+reactor DomeLampLogic {
+  input ajarLevel: int
+  logical action domeFade
+  output domeCmd: int
+  state level: int = 0
+  state fading: int = 0
+
+  // Theatre dimming. Closing the door does not switch the lamp off, it starts
+  // a fade that runs on its own 4 ms clock inside the branch. In Rebeca that
+  // is `self.domeFade() after(4)`; here it is a logical action.
+  reaction(ajarLevel) -> domeCmd, domeFade {=
+    if (ajarLevel->value == 1) {
+      self->fading = 0;
+      if (self->level != 2) {
+        self->level = 2;
+        lf_set(domeCmd, self->level);
+      }
+    } else if (self->fading == 0) {
+      self->fading = 1;
+      lf_schedule(domeFade, MSEC(4));
+    }
+  =}
+
+  reaction(domeFade) -> domeCmd, domeFade {=
+    if (self->fading == 1) {
+      if (self->level > 0) {
+        self->level--;
+        lf_set(domeCmd, self->level);
+        lf_schedule(domeFade, MSEC(4));
+      } else {
+        self->fading = 0;
+      }
+    }
+  =}
+}
+
+reactor DomeLamp {
+  input domeCmd: int
+  state brightness: int = 0
+
+  reaction(domeCmd) {=
+    self->brightness = domeCmd->value;
+    lf_print("t=%lld  OBSERVABLE  domeCmd(%d)",
+             (long long) lf_time_logical_elapsed(), self->brightness);
+  =}
+}
+
+// ============================== G  BLOWER ====================================
+
+reactor CabinTempSensor(period: time = 24 ms) {
+  timer t(6 ms, period)
+  output cabTemp: int
+  state cabin: int = 0
+
+  reaction(t) -> cabTemp {=
+    self->cabin = (self->cabin == 3) ? 0 : self->cabin + 1;
+    lf_set(cabTemp, self->cabin);
+  =}
+}
+
+reactor BlowerLogic {
+  input cabTemp: int
+  output fanCmd: int
+  state speed: int = 0
+
+  reaction(cabTemp) -> fanCmd {=
+    if (cabTemp->value != self->speed) {
+      self->speed = cabTemp->value;
+      lf_set(fanCmd, self->speed);
+    }
+  =}
+}
+
+reactor Blower {
+  input fanCmd: int
+  state speed: int = 0
+
+  reaction(fanCmd) {=
+    self->speed = fanCmd->value;
+    lf_print("t=%lld  OBSERVABLE  fanCmd(%d)",
+             (long long) lf_time_logical_elapsed(), self->speed);
+  =}
+}
+
+// =============================== H  ALARM ====================================
+
+reactor TiltSensor(period: time = 48 ms) {
+  timer t(7 ms, period)
+  output tiltLevel: int
+  output noteTilt: int              // OPTIONAL
+  state pattern: int = 0
+
+  // M: reaction(t) -> tiltLevel {=
+  reaction(t) -> tiltLevel, noteTilt {=
+    // Rebeca writes  tilt = ?(0, 1).  1 = the car is being jacked up.
+    static const int choices[2] = {0, 1};
+    self->pattern = (self->pattern + 1) % 2;
+    lf_set(tiltLevel, choices[self->pattern]);
+    lf_set(noteTilt,  choices[self->pattern]);   // OPTIONAL
+  =}
+}
+
+reactor AlarmLogic {
+  input tiltLevel: int
+  output hornCmd: int
+  state armed: int = 1
+  state sounding: int = 0
+
+  reaction(tiltLevel) -> hornCmd {=
+    if (self->armed == 1) {
+      if (tiltLevel->value == 1) {
+        if (self->sounding == 0) { self->sounding = 1; lf_set(hornCmd, 1); }
+      } else {
+        if (self->sounding == 1) { self->sounding = 0; lf_set(hornCmd, 0); }
+      }
+    }
+  =}
+}
+
+reactor Horn {
+  input hornCmd: int
+  state blowing: int = 0
+
+  reaction(hornCmd) {=
+    self->blowing = hornCmd->value;
+    lf_print("t=%lld  OBSERVABLE  hornCmd(%d)",
+             (long long) lf_time_logical_elapsed(), self->blowing);
+  =}
+}
+
+// ----------------------------- OPTIONAL MODULE -------------------------------
+reactor DiagLogger {                    // OBD-II tester in the workshop
+  input noteRain: int
+  input noteBeam: int
+  input noteBolt: int
+  input noteTilt: int
+  state frame: int = 0
+
+  reaction(noteRain) {= self->frame = noteRain->value; =}
+  reaction(noteBeam) {= self->frame = noteBeam->value; =}
+  reaction(noteBolt) {= self->frame = noteBolt->value; =}
+  reaction(noteTilt) {= self->frame = noteTilt->value; =}
+}
+// ---------------------------- END OPTIONAL MODULE ----------------------------
+
+main reactor {
+  // ---- branch A: wipers ----
+  rain        = new RainSensor()
+  wiperLogic  = new WiperLogic()
+  wiperMotor  = new WiperMotor()
+
+  // ---- branch B: exterior lighting ----
+  light         = new LightSensor()
+  lightingLogic = new LightingLogic()
+  headlamps     = new Headlamps()
+
+  // ---- branch C: central locking ----
+  fob        = new KeyFob()
+  lockLogic  = new LockLogic()
+  doorLatch  = new DoorLatch()
+
+  // ---- branch D: power window ----
+  winSwitch   = new WindowSwitch()
+  windowLogic = new WindowLogic()
+  windowMotor = new WindowMotor()
+
+  // ---- branch E: mirror heating ----
+  mirTemp      = new MirrorTempSensor()
+  mirrorLogic  = new MirrorHeatLogic()
+  mirrorHeater = new MirrorHeater()
+
+  // ---- branch F: interior lamp ----
+  ajar       = new DoorAjarSwitch()
+  domeLogic  = new DomeLampLogic()
+  domeLamp   = new DomeLamp()
+
+  // ---- branch G: blower ----
+  cabTemp     = new CabinTempSensor()
+  blowerLogic = new BlowerLogic()
+  blower      = new Blower()
+
+  // ---- branch H: alarm ----
+  tilt       = new TiltSensor()
+  alarmLogic = new AlarmLogic()
+  horn       = new Horn()
+
+  diag = new DiagLogger()                          // OPTIONAL
+
+  // ---- eight independent chains ----
+  rain.rainLevel          -> wiperLogic.rainLevel
+  wiperLogic.wiperCmd     -> wiperMotor.wiperCmd
+  wiperLogic.wiperStop    -> wiperMotor.wiperStop
+
+  light.ambientLevel      -> lightingLogic.ambientLevel
+  lightingLogic.beamCmd   -> headlamps.beamCmd
+
+  fob.fobCmd              -> lockLogic.fobCmd
+  lockLogic.boltCmd       -> doorLatch.boltCmd
+
+  winSwitch.winPinch      -> windowLogic.winPinch
+  winSwitch.winCmd        -> windowLogic.winCmd
+  windowLogic.glassCmd    -> windowMotor.glassCmd
+
+  mirTemp.mirTemp         -> mirrorLogic.mirTemp
+  mirrorLogic.mirCmd      -> mirrorHeater.mirCmd
+
+  ajar.ajarLevel          -> domeLogic.ajarLevel
+  domeLogic.domeCmd       -> domeLamp.domeCmd
+
+  cabTemp.cabTemp         -> blowerLogic.cabTemp
+  blowerLogic.fanCmd      -> blower.fanCmd
+
+  tilt.tiltLevel          -> alarmLogic.tiltLevel
+  alarmLogic.hornCmd      -> horn.hornCmd
+
+  // ---- the ONE edge that crosses a branch boundary ----
+  wiperLogic.wiperActive  -> lightingLogic.wiperActive
+
+  // ---- the removable sink ----
+  rain.noteRain           -> diag.noteRain         // OPTIONAL
+  lightingLogic.noteBeam  -> diag.noteBeam         // OPTIONAL
+  lockLogic.noteBolt      -> diag.noteBolt         // OPTIONAL
+  tilt.noteTilt           -> diag.noteTilt         // OPTIONAL
+}

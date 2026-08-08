@@ -1,0 +1,48 @@
+digraph G {
+center = TRUE;
+mclimit = 10.0;
+nodesep = 0.05;
+node [ width=0.25, height=0.25, label="" ];
+S0 [ peripheries=2 ];
+S1
+S2
+S3
+S4
+S5
+S6
+S7
+S8
+S9
+S10
+S11
+S12
+S13
+S14
+S15
+S16
+S17
+S18
+S0 -> S1[label="time +=3"];
+S1 -> S2[label="windowmotor.glasscmd[0].[]"];
+S1 -> S3[label="windowmotor.glasscmd[1].[]"];
+S2 -> S4[label="time +=8"];
+S3 -> S5[label="time +=8"];
+S4 -> S6[label="windowmotor.glasscmd[0].[]"];
+S4 -> S7[label="windowmotor.glasscmd[2].[]"];
+S5 -> S8[label="windowmotor.glasscmd[0].[]"];
+S5 -> S6[label="windowmotor.glasscmd[2].[]"];
+S6 -> S9[label="time +=8"];
+S7 -> S10[label="time +=8"];
+S8 -> S11[label="time +=8"];
+S9 -> S12[label="windowmotor.glasscmd[0].[]"];
+S10 -> S13[label="windowmotor.glasscmd[0].[]"];
+S11 -> S14[label="windowmotor.glasscmd[0].[]"];
+S12 -> S1[label="time +=8"];
+S13 -> S15[label="time +=8"];
+S14 -> S16[label="time +=8"];
+S15 -> S17[label="windowmotor.glasscmd[0].[]"];
+S15 -> S2[label="windowmotor.glasscmd[1].[]"];
+S16 -> S3[label="windowmotor.glasscmd[0].[]"];
+S17 -> S18[label="time +=8"];
+S18 -> S7[label="windowmotor.glasscmd[0].[]"];
+}

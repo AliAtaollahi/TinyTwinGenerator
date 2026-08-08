@@ -1,0 +1,633 @@
+/*
+ * Sample 2 - Automotive body control module (BCM)
+ *
+ * Topology 2: wide periodic fan-out with one peer dependency.
+ *
+ * Eight body functions hang off one controller. Each one owns a peripheral
+ * that is polled on its own period, a piece of logic, and a load. The eight
+ * branches are independent of each other with exactly ONE exception: when the
+ * wipers are running the low beam must come on, so branch A reaches across
+ * into branch B. Everything else is a peripheral in its own right and never
+ * looks at any other branch.
+ *
+ *   A wipers          RainSensor(16)       -> WiperLogic     -> WiperMotor
+ *   B lighting        LightSensor(12)      -> LightingLogic  -> Headlamps
+ *   C central lock    KeyFob(24)           -> LockLogic      -> DoorLatch
+ *   D power window    WindowSwitch(8)      -> WindowLogic    -> WindowMotor
+ *   E mirror heat     MirrorTempSensor(48) -> MirrorHeatLogic-> MirrorHeater
+ *   F interior lamp   DoorAjarSwitch(16)   -> DomeLampLogic  -> DomeLamp
+ *   G blower          CabinTempSensor(24)  -> BlowerLogic    -> Blower
+ *   H alarm           TiltSensor(48)       -> AlarmLogic     -> Horn
+ *
+ *   A.WiperLogic -> B.LightingLogic       the single peer dependency
+ *
+ * The removable module is the diagnostic logger: a workshop tester plugged
+ * into the OBD-II socket that streams body events and commands nothing.
+ *
+ * Restricted fragment: no delay, no deadline, no local variables.
+ * Message-queue sizes are 20 throughout.
+ */
+
+/* ============================================================ A  wipers  */
+
+reactiveclass RainSensor(20) {
+    knownrebecs {
+        WiperLogic wiperLogic;
+        DiagLogger diag;                       // OPTIONAL
+    }
+    statevars {
+        int rain;
+    }
+    RainSensor() {
+        rain = 0;
+        self.rainTick();
+    }
+    // The rain sensor is a genuine environment input: how hard it is raining
+    // in sixteen milliseconds' time is not a function of anything in the model.
+    msgsrv rainTick() {
+        rain = ?(0, 1, 2);
+        wiperLogic.rainLevel(rain);
+        diag.noteRain(rain);                   // OPTIONAL
+        self.rainTick() after(16);
+    }
+}
+
+reactiveclass WiperLogic(20) {
+    knownrebecs {
+        WiperMotor wiperMotor;
+        LightingLogic lightingLogic;
+    }
+    statevars {
+        int wiperMode;
+    }
+    WiperLogic() {
+        wiperMode = 0;
+    }
+    // The motor command is refreshed every cycle, the way a real wiper
+    // command is re-sent over LIN rather than latched once. The cross-branch
+    // notification is sent only when the wiperMode actually changes.
+    msgsrv rainLevel(int level) {
+        if (level == 0) {
+            wiperMotor.wiperStop();
+        } else {
+            wiperMotor.wiperCmd(level);
+        }
+        if (level != wiperMode) {
+            wiperMode = level;
+            // The one edge that leaves this branch. In most jurisdictions the
+            // low beam is required whenever the wipers are running.
+            lightingLogic.wiperActive(wiperMode);
+        }
+    }
+}
+
+reactiveclass WiperMotor(20) {
+    statevars {
+        int sweeping;
+    }
+    WiperMotor() {
+        sweeping = 0;
+    }
+    msgsrv wiperCmd(int speed) {
+        sweeping = speed;
+    }
+    msgsrv wiperStop() {
+        sweeping = 0;
+    }
+}
+
+/* ========================================================== B  lighting  */
+
+reactiveclass LightSensor(20) {
+    knownrebecs {
+        LightingLogic lightingLogic;
+    }
+    statevars {
+        int lux;
+    }
+    LightSensor() {
+        lux = 3;
+        self.lightTick() after(1);
+    }
+    // Ambient light walks down to dark and wraps back round: dusk, night,
+    // dawn, day. Deterministic, so this branch costs almost no state.
+    msgsrv lightTick() {
+        if (lux == 0) {
+            lux = 3;
+        } else {
+            lux = lux - 1;
+        }
+        lightingLogic.ambientLevel(lux);
+        self.lightTick() after(12);
+    }
+}
+
+reactiveclass LightingLogic(20) {
+    knownrebecs {
+        Headlamps headlamps;
+        DiagLogger diag;                       // OPTIONAL
+    }
+    statevars {
+        int lux;
+        int wipers;
+        int beam;
+        int want;
+    }
+    LightingLogic() {
+        lux = 3;
+        wipers = 0;
+        beam = 0;
+        want = 0;
+    }
+    msgsrv ambientLevel(int level) {
+        lux = level;
+        self.decide();
+    }
+    msgsrv wiperActive(int running) {
+        wipers = running;
+        self.decide();
+    }
+    msgsrv decide() {
+        want = 0;
+        if (lux <= 1) {
+            want = 1;
+        }
+        if (wipers > 0) {
+            want = 1;
+        }
+        if (want != beam) {
+            beam = want;
+            headlamps.beamCmd(beam);
+            diag.noteBeam(beam);               // OPTIONAL
+        }
+    }
+}
+
+reactiveclass Headlamps(20) {
+    statevars {
+        int beam;
+    }
+    Headlamps() {
+        beam = 0;
+    }
+    msgsrv beamCmd(int level) {
+        beam = level;
+    }
+}
+
+/* ===================================================== C  central lock   */
+
+reactiveclass KeyFob(20) {
+    knownrebecs {
+        LockLogic lockLogic;
+    }
+    statevars {
+        int press;
+    }
+    KeyFob() {
+        press = 0;
+        self.fobTick() after(2);
+    }
+    msgsrv fobTick() {
+        press = ?(0, 1);
+        lockLogic.fobCmd(press);
+        self.fobTick() after(24);
+    }
+}
+
+reactiveclass LockLogic(20) {
+    knownrebecs {
+        DoorLatch doorLatch;
+        DiagLogger diag;                       // OPTIONAL
+    }
+    statevars {
+        int locked;
+    }
+    LockLogic() {
+        locked = 0;
+    }
+    msgsrv fobCmd(int press) {
+        if (press != locked) {
+            locked = press;
+            doorLatch.boltCmd(locked);
+            diag.noteBolt(locked);             // OPTIONAL
+        }
+    }
+}
+
+reactiveclass DoorLatch(20) {
+    statevars {
+        int bolt;
+    }
+    DoorLatch() {
+        bolt = 0;
+    }
+    msgsrv boltCmd(int closed) {
+        bolt = closed;
+    }
+}
+
+/* ====================================================== D  power window  */
+
+reactiveclass WindowSwitch(20) {
+    knownrebecs {
+        WindowLogic windowLogic;
+    }
+    statevars {
+        int rocker;
+        int obstruction;
+    }
+    WindowSwitch() {
+        rocker = 0;
+        obstruction = 0;
+        self.winTick() after(3);
+    }
+    // The rocker is a person: released, up, down, round again. What is NOT
+    // predictable is whether something is in the window frame, so the
+    // anti-pinch strip is the nondeterministic input on this branch. Both
+    // land in the same bag, so the guard and the command genuinely race.
+    msgsrv winTick() {
+        if (rocker == 2) {
+            rocker = 0;
+        } else {
+            rocker = rocker + 1;
+        }
+        obstruction = ?(0, 1);
+        windowLogic.winPinch(obstruction);
+        windowLogic.winCmd(rocker);
+        self.winTick() after(8);
+    }
+}
+
+reactiveclass WindowLogic(20) {
+    knownrebecs {
+        WindowMotor windowMotor;
+    }
+    statevars {
+        int height;
+        int drive;
+        int blocked;
+    }
+    WindowLogic() {
+        height = 1;
+        drive = 0;
+        blocked = 0;
+    }
+    msgsrv winPinch(int obstruction) {
+        blocked = obstruction;
+    }
+    // End-stop protection: the motor is not driven into a closed or fully
+    // open window, which is what stalls a real window motor. Anti-pinch wins
+    // over everything.
+    msgsrv winCmd(int request) {
+        drive = request;
+        if (blocked == 1) {
+            drive = 0;
+        }
+        if (drive == 1) {
+            if (height == 2) {
+                drive = 0;
+            } else {
+                height = height + 1;
+            }
+        }
+        if (drive == 2) {
+            if (height == 0) {
+                drive = 0;
+            } else {
+                height = height - 1;
+            }
+        }
+        windowMotor.glassCmd(drive);
+    }
+}
+
+reactiveclass WindowMotor(20) {
+    statevars {
+        int drive;
+    }
+    WindowMotor() {
+        drive = 0;
+    }
+    msgsrv glassCmd(int direction) {
+        drive = direction;
+    }
+}
+
+/* ======================================================= E  mirror heat  */
+
+reactiveclass MirrorTempSensor(20) {
+    knownrebecs {
+        MirrorHeatLogic mirrorLogic;
+    }
+    statevars {
+        int outside;
+    }
+    MirrorTempSensor() {
+        outside = 2;
+        self.mirTick() after(4);
+    }
+    msgsrv mirTick() {
+        if (outside == 0) {
+            outside = 3;
+        } else {
+            outside = outside - 1;
+        }
+        mirrorLogic.mirTemp(outside);
+        self.mirTick() after(48);
+    }
+}
+
+reactiveclass MirrorHeatLogic(20) {
+    knownrebecs {
+        MirrorHeater mirrorHeater;
+    }
+    statevars {
+        int heating;
+    }
+    MirrorHeatLogic() {
+        heating = 0;
+    }
+    // Hysteresis: on below freezing, off once it is properly warm.
+    msgsrv mirTemp(int outside) {
+        if (outside <= 1) {
+            if (heating == 0) {
+                heating = 1;
+                mirrorHeater.mirCmd(1);
+            }
+        }
+        if (outside >= 3) {
+            if (heating == 1) {
+                heating = 0;
+                mirrorHeater.mirCmd(0);
+            }
+        }
+    }
+}
+
+reactiveclass MirrorHeater(20) {
+    statevars {
+        int element;
+    }
+    MirrorHeater() {
+        element = 0;
+    }
+    msgsrv mirCmd(int on) {
+        element = on;
+    }
+}
+
+/* ==================================================== F  interior lamp   */
+
+reactiveclass DoorAjarSwitch(20) {
+    knownrebecs {
+        DomeLampLogic domeLogic;
+    }
+    statevars {
+        int ajar;
+    }
+    DoorAjarSwitch() {
+        ajar = 0;
+        self.ajarTick() after(5);
+    }
+    msgsrv ajarTick() {
+        if (ajar == 0) {
+            ajar = 1;
+        } else {
+            ajar = 0;
+        }
+        domeLogic.ajarLevel(ajar);
+        self.ajarTick() after(16);
+    }
+}
+
+reactiveclass DomeLampLogic(20) {
+    knownrebecs {
+        DomeLamp domeLamp;
+    }
+    statevars {
+        int level;
+        int fading;
+    }
+    DomeLampLogic() {
+        level = 0;
+        fading = 0;
+    }
+    // Theatre dimming. The door closing does not switch the lamp off, it
+    // starts a fade that runs on its own clock inside the branch.
+    msgsrv ajarLevel(int ajar) {
+        if (ajar == 1) {
+            fading = 0;
+            if (level != 2) {
+                level = 2;
+                domeLamp.domeCmd(level);
+            }
+        } else {
+            if (fading == 0) {
+                fading = 1;
+                self.domeFade() after(4);
+            }
+        }
+    }
+    msgsrv domeFade() {
+        if (fading == 1) {
+            if (level > 0) {
+                level = level - 1;
+                domeLamp.domeCmd(level);
+                self.domeFade() after(4);
+            } else {
+                fading = 0;
+            }
+        }
+    }
+}
+
+reactiveclass DomeLamp(20) {
+    statevars {
+        int brightness;
+    }
+    DomeLamp() {
+        brightness = 0;
+    }
+    msgsrv domeCmd(int level) {
+        brightness = level;
+    }
+}
+
+/* =========================================================== G  blower   */
+
+reactiveclass CabinTempSensor(20) {
+    knownrebecs {
+        BlowerLogic blowerLogic;
+    }
+    statevars {
+        int cabin;
+    }
+    CabinTempSensor() {
+        cabin = 0;
+        self.cabTick() after(6);
+    }
+    msgsrv cabTick() {
+        if (cabin == 3) {
+            cabin = 0;
+        } else {
+            cabin = cabin + 1;
+        }
+        blowerLogic.cabTemp(cabin);
+        self.cabTick() after(24);
+    }
+}
+
+reactiveclass BlowerLogic(20) {
+    knownrebecs {
+        Blower blower;
+    }
+    statevars {
+        int speed;
+    }
+    BlowerLogic() {
+        speed = 0;
+    }
+    msgsrv cabTemp(int cabin) {
+        if (cabin != speed) {
+            speed = cabin;
+            blower.fanCmd(speed);
+        }
+    }
+}
+
+reactiveclass Blower(20) {
+    statevars {
+        int speed;
+    }
+    Blower() {
+        speed = 0;
+    }
+    msgsrv fanCmd(int step) {
+        speed = step;
+    }
+}
+
+/* ============================================================ H  alarm   */
+
+reactiveclass TiltSensor(20) {
+    knownrebecs {
+        AlarmLogic alarmLogic;
+        DiagLogger diag;                       // OPTIONAL
+    }
+    statevars {
+        int tilt;
+    }
+    TiltSensor() {
+        tilt = 0;
+        self.tiltTick() after(7);
+    }
+    msgsrv tiltTick() {
+        tilt = ?(0, 1);
+        alarmLogic.tiltLevel(tilt);
+        diag.noteTilt(tilt);                   // OPTIONAL
+        self.tiltTick() after(48);
+    }
+}
+
+reactiveclass AlarmLogic(20) {
+    knownrebecs {
+        Horn horn;
+    }
+    statevars {
+        int armed;
+        int sounding;
+    }
+    AlarmLogic() {
+        armed = 1;
+        sounding = 0;
+    }
+    msgsrv tiltLevel(int tilt) {
+        if (armed == 1) {
+            if (tilt == 1) {
+                if (sounding == 0) {
+                    sounding = 1;
+                    horn.hornCmd(1);
+                }
+            } else {
+                if (sounding == 1) {
+                    sounding = 0;
+                    horn.hornCmd(0);
+                }
+            }
+        }
+    }
+}
+
+reactiveclass Horn(20) {
+    statevars {
+        int blowing;
+    }
+    Horn() {
+        blowing = 0;
+    }
+    msgsrv hornCmd(int on) {
+        blowing = on;
+    }
+}
+
+/* ==================================== the removable module: OBD-II tester */
+
+// OPTIONAL MODULE
+reactiveclass DiagLogger(20) {
+    statevars {
+        int frame;
+    }
+    DiagLogger() {
+        frame = 0;
+    }
+    msgsrv noteRain(int value) {
+        frame = value;
+    }
+    msgsrv noteBeam(int value) {
+        frame = value;
+    }
+    msgsrv noteBolt(int value) {
+        frame = value;
+    }
+    msgsrv noteTilt(int value) {
+        frame = value;
+    }
+}
+// END OPTIONAL MODULE
+
+main {
+    RainSensor rainSensor(wiperLogic, diag):();                 // M: RainSensor rainSensor(wiperLogic):();
+    WiperLogic wiperLogic(wiperMotor, lightingLogic):();
+    WiperMotor wiperMotor():();
+
+    LightSensor lightSensor(lightingLogic):();
+    LightingLogic lightingLogic(headlamps, diag):();             // M: LightingLogic lightingLogic(headlamps):();
+    Headlamps headlamps():();
+
+    KeyFob keyFob(lockLogic):();
+    LockLogic lockLogic(doorLatch, diag):();                     // M: LockLogic lockLogic(doorLatch):();
+    DoorLatch doorLatch():();
+
+    WindowSwitch windowSwitch(windowLogic):();
+    WindowLogic windowLogic(windowMotor):();
+    WindowMotor windowMotor():();
+
+    MirrorTempSensor mirrorTempSensor(mirrorLogic):();
+    MirrorHeatLogic mirrorLogic(mirrorHeater):();
+    MirrorHeater mirrorHeater():();
+
+    DoorAjarSwitch doorAjarSwitch(domeLogic):();
+    DomeLampLogic domeLogic(domeLamp):();
+    DomeLamp domeLamp():();
+
+    CabinTempSensor cabinTempSensor(blowerLogic):();
+    BlowerLogic blowerLogic(blower):();
+    Blower blower():();
+
+    TiltSensor tiltSensor(alarmLogic, diag):();                  // M: TiltSensor tiltSensor(alarmLogic):();
+    AlarmLogic alarmLogic(horn):();
+    Horn horn():();
+
+    DiagLogger diag():();                                        // OPTIONAL
+}

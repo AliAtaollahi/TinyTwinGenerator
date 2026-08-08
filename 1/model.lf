@@ -1,0 +1,470 @@
+/**
+ * Wind turbine controller - NREL ROSCO-class reference controller.
+ *
+ * Lingua Franca version of model.rebeca.
+ *
+ * This is the SHARED-SENSOR FAN-OUT case study. Four sensors are read on the
+ * nacelle and broadcast to five components, and each of those five is the root
+ * of its OWN subtree - its own period, its own chain, its own actuator:
+ *
+ *   RotorSpeedSensor --> TorqueController    -> converter -> Generator
+ *                    --> PitchController     -> limiter -> actuator -> Blades
+ *                    --> YawController       -> drive -> Nacelle
+ *                    --> SupervisoryControl  -> sequencer -> Brake
+ *                    --> ScadaLogger         (OPTIONAL sink)
+ *
+ * In the reactor diagram the subtrees are visibly disjoint. The ONLY thing
+ * that crosses between them is ShutdownSequencer, which is what a supervisor
+ * is for: it feathers the blades, trips the converter and sets the brake.
+ *
+ * Five distinct rates:
+ *
+ *   RotorSpeedSensor   4 ms      TorqueController     4 ms
+ *   PowerSensor        8 ms      PitchController      8 ms
+ *   Anemometer        12 ms      SupervisoryControl  16 ms
+ *   VibrationSensor   16 ms      YawController       24 ms
+ *
+ * The graph is acyclic - the rotor speeding up and the blades biting the wind
+ * is physics, and it closes outside the model - so no delay, no logical action
+ * and no cycle-breaking reaction order is needed. Reaction order is used only
+ * where the supervisor's override must win at the same tag.
+ *
+ * A line "// M: <code>" means: to build M, replace the line that follows it
+ * with <code>. Everything else is deleted by removing the lines and blocks
+ * marked OPTIONAL.
+ */
+target C {
+  timeout: 200 ms
+}
+
+// ------------------------------- THE PLANTS ----------------------------------
+
+reactor Generator {
+  input applyTorque: int
+  state torque: int = 0
+
+  reaction(applyTorque) {=
+    self->torque = applyTorque->value;
+    lf_print("t=%lld  OBSERVABLE  applyTorque(%d)",
+             (long long) lf_time_logical_elapsed(), self->torque);
+  =}
+}
+
+reactor Blades {
+  input setAngle: int
+  state angle: int = 0
+
+  reaction(setAngle) {=
+    self->angle = setAngle->value;
+    lf_print("t=%lld  OBSERVABLE  setAngle(%d)",
+             (long long) lf_time_logical_elapsed(), self->angle);
+  =}
+}
+
+reactor Nacelle {
+  input rotate: int
+  state heading: int = 0
+
+  reaction(rotate) {=
+    if (rotate->value == 1)      { if (self->heading < 2) self->heading++; }
+    else if (rotate->value == 0) { if (self->heading > 0) self->heading--; }
+    lf_print("t=%lld  OBSERVABLE  rotate(cmd=%d, heading=%d)",
+             (long long) lf_time_logical_elapsed(), rotate->value, self->heading);
+  =}
+}
+
+reactor Brake {
+  input applyBrake: bool
+  input releaseBrake: bool
+  state applied: bool = false
+
+  reaction(applyBrake) {=
+    self->applied = true;
+    lf_print("t=%lld  OBSERVABLE  brake applyBrake", (long long) lf_time_logical_elapsed());
+  =}
+
+  reaction(releaseBrake) {=
+    self->applied = false;
+    lf_print("t=%lld  OBSERVABLE  brake releaseBrake", (long long) lf_time_logical_elapsed());
+  =}
+}
+
+// -------------------------- SUBTREE 1: TORQUE --------------------------------
+
+reactor TorqueController(period: time = 4 ms) {
+  timer t(2 ms, period)
+  input newSpeed: int
+  input newPower: int
+  output setTorque: int
+  output logTorque: int             // OPTIONAL
+
+  state rpm: int = 2
+  state power: int = 0
+  state demand: int = 0
+
+  reaction(newSpeed) {= self->rpm   = newSpeed->value; =}
+  reaction(newPower) {= self->power = newPower->value; =}
+
+  // M: reaction(t) -> setTorque {=
+  reaction(t) -> setTorque, logTorque {=
+    self->demand = self->rpm;             // below rated: torque tracks speed
+    if (self->power > 2) self->demand--;  // at rated power, ask for no more
+    if (self->demand < 0) self->demand = 0;
+    if (self->demand > 3) self->demand = 3;
+    lf_set(setTorque, self->demand);
+    lf_set(logTorque, self->demand);      // OPTIONAL
+  =}
+}
+
+reactor ConverterDriver {
+  input setTorque: int
+  input openBreaker: bool
+  input reconnect: bool
+  output applyTorque: int
+  state enabled: bool = true
+  state torque: int = 0
+
+  // the supervisor's override is declared before the normal command
+  reaction(openBreaker) -> applyTorque {=
+    self->enabled = false;
+    self->torque = 0;
+    lf_set(applyTorque, 0);
+  =}
+
+  reaction(reconnect) {= self->enabled = true; =}
+
+  reaction(setTorque) -> applyTorque {=
+    self->torque = setTorque->value;
+    if (self->enabled) lf_set(applyTorque, self->torque);
+  =}
+}
+
+// --------------------------- SUBTREE 2: PITCH --------------------------------
+
+reactor PitchController(period: time = 8 ms) {
+  timer t(3 ms, period)
+  input newSpeed: int
+  input newWind: int
+  output newPitchDemand: int
+
+  state rpm: int = 2
+  state wind: int = 2
+  state demand: int = 0
+
+  reaction(newSpeed) {= self->rpm  = newSpeed->value; =}
+  reaction(newWind)  {= self->wind = newWind->value;  =}
+
+  reaction(t) -> newPitchDemand {=
+    // above rated wind, feather to shed power
+    self->demand = (self->wind > 3) ? self->wind - 3 : 0;
+    if (self->rpm > 3) self->demand++;         // over-speed: feather further
+    if (self->demand > 3) self->demand = 3;
+    lf_set(newPitchDemand, self->demand);
+  =}
+}
+
+reactor PitchRateLimiter {                   // blades cannot slew instantly
+  input newPitchDemand: int
+  output setPitch: int
+  state angle: int = 0
+
+  reaction(newPitchDemand) -> setPitch {=
+    if (newPitchDemand->value > self->angle)      self->angle++;
+    else if (newPitchDemand->value < self->angle) self->angle--;
+    lf_set(setPitch, self->angle);
+  =}
+}
+
+reactor PitchActuator {
+  input setPitch: int
+  input feather: bool
+  input restorePitch: bool
+  output setAngle: int
+  state feathered: bool = false
+  state angle: int = 0
+
+  // the supervisor's override is declared before the normal command
+  reaction(feather) -> setAngle {=
+    self->feathered = true;
+    self->angle = 3;
+    lf_set(setAngle, self->angle);
+  =}
+
+  reaction(restorePitch) {= self->feathered = false; =}
+
+  reaction(setPitch) -> setAngle {=
+    if (!self->feathered) {
+      self->angle = setPitch->value;
+      lf_set(setAngle, self->angle);
+    }
+  =}
+}
+
+// ---------------------------- SUBTREE 3: YAW ---------------------------------
+
+reactor YawController(period: time = 24 ms) {   // the slowest loop by far
+  timer t(9 ms, period)
+  input newSpeed: int
+  input newDirection: int
+  output yaw: int
+
+  state rpm: int = 2
+  state wanted: int = 0
+  state position: int = 0
+  state command: int = 2                        // 2 = hold
+
+  reaction(newSpeed)     {= self->rpm    = newSpeed->value;     =}
+  reaction(newDirection) {= self->wanted = newDirection->value; =}
+
+  reaction(t) -> yaw {=
+    if (self->rpm < 3) {
+      self->command = 2;                        // below cut-in, yaw is inhibited
+    } else if (self->wanted > self->position) {
+      self->command = 1; self->position++;
+    } else if (self->wanted < self->position) {
+      self->command = 0; self->position--;
+    } else {
+      self->command = 2;
+    }
+    lf_set(yaw, self->command);
+  =}
+}
+
+reactor YawDrive {
+  input yaw: int
+  output rotate: int
+  state command: int = 2
+
+  reaction(yaw) -> rotate {=
+    self->command = yaw->value;
+    lf_set(rotate, self->command);
+  =}
+}
+
+// -------------------------- SUBTREE 4: SAFETY --------------------------------
+
+reactor SupervisoryControl(period: time = 16 ms) {
+  timer t(13 ms, period)
+  input newSpeed: int
+  input newWind: int
+  input newPower: int
+  input newVibration: int
+  output trip: bool
+  output clear: bool
+
+  state rpm: int = 2
+  state wind: int = 2
+  state power: int = 0
+  state vibration: int = 1
+
+  reaction(newSpeed)     {= self->rpm       = newSpeed->value;     =}
+  reaction(newWind)      {= self->wind      = newWind->value;      =}
+  reaction(newPower)     {= self->power     = newPower->value;     =}
+  reaction(newVibration) {= self->vibration = newVibration->value; =}
+
+  reaction(t) -> trip, clear {=
+    if (self->vibration > 3 || self->wind > 4) lf_set(trip, true);
+    else                                       lf_set(clear, true);
+  =}
+}
+
+reactor ShutdownSequencer {             // the ONE reactor that crosses subtrees
+  input trip: bool
+  input clear: bool
+  output feather: bool
+  output restorePitch: bool
+  output openBreaker: bool
+  output reconnect: bool
+  output applyBrake: bool
+  output releaseBrake: bool
+  output logEvent: int              // OPTIONAL
+  state tripped: bool = false
+
+  // M: reaction(trip) -> feather, openBreaker, applyBrake {=
+  reaction(trip) -> feather, openBreaker, applyBrake, logEvent {=
+    if (!self->tripped) {
+      self->tripped = true;
+      lf_set(feather, true);
+      lf_set(openBreaker, true);
+      lf_set(applyBrake, true);
+      lf_set(logEvent, 1);                      // OPTIONAL
+    }
+  =}
+
+  reaction(clear) -> restorePitch, reconnect, releaseBrake {=
+    if (self->tripped) {
+      self->tripped = false;
+      lf_set(restorePitch, true);
+      lf_set(reconnect, true);
+      lf_set(releaseBrake, true);
+    }
+  =}
+}
+
+// ------------------------- THE SHARED SENSOR FRONT END -----------------------
+
+reactor RotorSpeedSensor(period: time = 4 ms) {
+  timer t(0, period)
+  // ONE output feeding FOUR reactors. A Lingua Franca output may fan out as
+  // widely as it likes; it is only an input that may not have two sources.
+  output newSpeed: int
+  output logSpeed: int              // OPTIONAL
+  state rpm: int = 2
+
+  // M: reaction(t) -> newSpeed {=
+  reaction(t) -> newSpeed, logSpeed {=
+    // 2,3,4,5 - four values, so the cycle does not phase-lock
+    // with the 24 ms yaw loop
+    self->rpm = (self->rpm == 5) ? 2 : self->rpm + 1;
+    lf_set(newSpeed, self->rpm);
+    lf_set(logSpeed, self->rpm);              // OPTIONAL
+  =}
+}
+
+reactor PowerSensor(period: time = 8 ms) {
+  timer t(1 ms, period)
+  output newPower: int
+  output logPower: int              // OPTIONAL
+  state power: int = 0
+
+  // M: reaction(t) -> newPower {=
+  reaction(t) -> newPower, logPower {=
+    self->power = (self->power == 3) ? 0 : self->power + 1;
+    lf_set(newPower, self->power);
+    lf_set(logPower, self->power);            // OPTIONAL
+  =}
+}
+
+reactor Anemometer(period: time = 12 ms) {
+  timer t(5 ms, period)
+  output newWind: int
+  output newDirection: int
+  state pattern: int = 0
+  state direction: int = 0
+
+  reaction(t) -> newWind, newDirection {=
+    // Rebeca writes  wind = ?(2, 5)  -- a nondeterministic choice.
+    // Lingua Franca is deterministic, so the two choices are enumerated.
+    // 5 is a storm, above the cut-out limit.
+    static const int choices[2] = {2, 5};
+    self->pattern = (self->pattern + 1) % 2;
+    self->direction = (self->direction == 2) ? 0 : self->direction + 1;
+    lf_set(newWind, choices[self->pattern]);
+    lf_set(newDirection, self->direction);
+  =}
+}
+
+reactor VibrationSensor(period: time = 16 ms) {
+  timer t(7 ms, period)
+  output newVibration: int
+  output logVibration: int          // OPTIONAL
+  state pattern: int = 0
+
+  // M: reaction(t) -> newVibration {=
+  reaction(t) -> newVibration, logVibration {=
+    static const int choices[2] = {1, 4};   // 4 is above the trip threshold
+    self->pattern = (self->pattern + 1) % 2;
+    lf_set(newVibration, choices[self->pattern]);
+    lf_set(logVibration, choices[self->pattern]);   // OPTIONAL
+  =}
+}
+
+// ------------------------------ OPTIONAL MODULE ------------------------------
+reactor ScadaLogger {                        // the wind-farm SCADA link
+  input logSpeed: int
+  input logPower: int
+  input logTorque: int
+  input logEvent: int
+  state lastSpeed: int = 0
+  state lastPower: int = 0
+  state lastTorque: int = 0
+  state lastEvent: int = 0
+
+  reaction(logSpeed)  {= self->lastSpeed  = logSpeed->value;  =}
+  reaction(logPower)  {= self->lastPower  = logPower->value;  =}
+  reaction(logTorque) {= self->lastTorque = logTorque->value; =}
+  reaction(logEvent)  {= self->lastEvent  = logEvent->value;  =}
+}
+
+reactor ConditionMonitor {                   // vibration trending, retrofitted
+  input logVibration: int
+  state lastLevel: int = 0
+
+  reaction(logVibration) {=
+    self->lastLevel = logVibration->value;
+  =}
+}
+// ---------------------------- END OPTIONAL MODULE ----------------------------
+
+main reactor {
+  generator  = new Generator()
+  blades     = new Blades()
+  nacelle    = new Nacelle()
+  brake      = new Brake()
+
+  converter  = new ConverterDriver()
+  torque     = new TorqueController()
+
+  actuator   = new PitchActuator()
+  limiter    = new PitchRateLimiter()
+  pitch      = new PitchController()
+
+  yawdrive   = new YawDrive()
+  yaw        = new YawController()
+
+  sequencer  = new ShutdownSequencer()
+  supervisor = new SupervisoryControl()
+
+  speed      = new RotorSpeedSensor()
+  pwr        = new PowerSensor()
+  wind       = new Anemometer()
+  vib        = new VibrationSensor()
+
+  scada      = new ScadaLogger()                     // OPTIONAL
+  monitor    = new ConditionMonitor()                // OPTIONAL
+
+  // ---- the shared sensor front end fanning out into the five subtrees ----
+  speed.newSpeed        -> torque.newSpeed
+  speed.newSpeed        -> pitch.newSpeed
+  speed.newSpeed        -> yaw.newSpeed
+  speed.newSpeed        -> supervisor.newSpeed
+
+  pwr.newPower          -> torque.newPower
+  pwr.newPower          -> supervisor.newPower
+
+  wind.newWind          -> pitch.newWind
+  wind.newWind          -> supervisor.newWind
+  wind.newDirection     -> yaw.newDirection
+
+  vib.newVibration      -> supervisor.newVibration
+
+  // ---- subtree 1: torque ----
+  torque.setTorque      -> converter.setTorque
+  converter.applyTorque -> generator.applyTorque
+
+  // ---- subtree 2: pitch ----
+  pitch.newPitchDemand  -> limiter.newPitchDemand
+  limiter.setPitch      -> actuator.setPitch
+  actuator.setAngle     -> blades.setAngle
+
+  // ---- subtree 3: yaw ----
+  yaw.yaw               -> yawdrive.yaw
+  yawdrive.rotate       -> nacelle.rotate
+
+  // ---- subtree 4: safety, and the only edges that cross subtrees ----
+  supervisor.trip       -> sequencer.trip
+  supervisor.clear      -> sequencer.clear
+  sequencer.feather      -> actuator.feather
+  sequencer.restorePitch -> actuator.restorePitch
+  sequencer.openBreaker  -> converter.openBreaker
+  sequencer.reconnect    -> converter.reconnect
+  sequencer.applyBrake   -> brake.applyBrake
+  sequencer.releaseBrake -> brake.releaseBrake
+
+  // ---- subtree 5: the removable sinks ----
+  speed.logSpeed        -> scada.logSpeed            // OPTIONAL
+  pwr.logPower          -> scada.logPower            // OPTIONAL
+  torque.logTorque      -> scada.logTorque           // OPTIONAL
+  sequencer.logEvent    -> scada.logEvent            // OPTIONAL
+  vib.logVibration      -> monitor.logVibration      // OPTIONAL
+}

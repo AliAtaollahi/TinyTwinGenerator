@@ -1,0 +1,585 @@
+// =============================================================================
+//  Wind turbine controller - NREL ROSCO-class reference controller
+// =============================================================================
+//
+//  WHAT MAKES THIS ONE DIFFERENT
+//    Every other case study is one pipeline, or several pipelines that were
+//    never related. This one is the SHARED-SENSOR FAN-OUT: a small set of
+//    sensors on the nacelle is read once, and the readings are broadcast to
+//    FIVE components, each of which is the root of its OWN independent
+//    subtree, with its own period, its own chain, and its own actuator.
+//
+//    The rotor-speed sensor alone feeds five:
+//
+//      RotorSpeedSensor --> TorqueController    -> converter -> Generator
+//                       --> PitchController     -> limiter -> actuator -> Blades
+//                       --> YawController       -> drive -> Nacelle
+//                       --> SupervisoryControl  -> sequencer -> Brake
+//                       --> ScadaLogger         (OPTIONAL sink)
+//
+//    In the Lingua Franca diagram those five subtrees are visibly disjoint:
+//    the sensors sit on the left, and nothing crosses from one subtree to
+//    another except the supervisory shutdown, which is the whole point of
+//    having a supervisor.
+//
+//  THE SENSOR FRONT END
+//    RotorSpeedSensor  time-driven, period  4, offset  0.  Feeds 5 components.
+//    PowerSensor       time-driven, period  8, offset  1.  Feeds 3.
+//    Anemometer        time-driven, period 12, offset  5.  Feeds 3.
+//    VibrationSensor   time-driven, period 16, offset  7.  Feeds 2.
+//
+//  THE FOUR FUNCTIONAL SUBTREES
+//    1  torque   TorqueController(4)   -> ConverterDriver -> Generator
+//                below rated wind, torque tracks rotor speed to capture power
+//    2  pitch    PitchController(8)    -> PitchRateLimiter -> PitchActuator
+//                -> Blades.  Above rated wind, feather to shed power. The rate
+//                limiter is real: blades cannot slew instantly.
+//    3  yaw      YawController(24)     -> YawDrive -> Nacelle
+//                slowest loop by far - point the nacelle into the wind
+//    4  safety   SupervisoryControl(16) -> ShutdownSequencer -> Brake
+//                and it OVERRIDES subtrees 1 and 2: feather the blades, trip
+//                the converter, set the brake
+//
+//  DEPENDENCY SHAPE
+//    one shared sensor front end fanning out into five disjoint subtrees at
+//    five distinct rates - 4, 8, 12, 16, 24 - with exactly one module allowed
+//    to reach across them. Four separate plants, so the observable set has one
+//    member per functional subtree.
+//
+//  THE M / M' PAIR
+//    M  = delete every line marked OPTIONAL      M' = this file
+//    O  = { Generator.applyTorque , Blades.setAngle ,
+//           Nacelle.rotate , Brake.applyBrake , Brake.releaseBrake }
+//
+//    Real-world meaning: every turbine in a wind farm reports to SCADA, and
+//    condition monitoring (vibration trending for gearbox and bearing health)
+//    is retrofitted to turbines already in the field. Neither may change how
+//    the machine shuts itself down in a storm.
+//
+//  FRAGMENT: no delay, no deadline, no local variables.
+// =============================================================================
+
+// ------------------------------- THE PLANTS ----------------------------------
+
+reactiveclass Generator(20) {
+	statevars {
+		int torque;
+	}
+	Generator() {
+		torque = 0;
+	}
+	msgsrv applyTorque(int t) {      // OBSERVABLE
+		torque = t;
+	}
+}
+
+reactiveclass Blades(20) {
+	statevars {
+		int angle;
+	}
+	Blades() {
+		angle = 0;
+	}
+	msgsrv setAngle(int a) {         // OBSERVABLE
+		angle = a;
+	}
+}
+
+reactiveclass Nacelle(20) {
+	statevars {
+		int heading;
+	}
+	Nacelle() {
+		heading = 0;
+	}
+	msgsrv rotate(int c) {           // OBSERVABLE
+		if (c == 1) {
+			if (heading < 2) {
+				heading = heading + 1;
+			}
+		} else if (c == 0) {
+			if (heading > 0) {
+				heading = heading - 1;
+			}
+		}
+	}
+}
+
+reactiveclass Brake(20) {
+	statevars {
+		boolean applied;
+	}
+	Brake() {
+		applied = false;
+	}
+	msgsrv applyBrake() {            // OBSERVABLE
+		applied = true;
+	}
+	msgsrv releaseBrake() {          // OBSERVABLE
+		applied = false;
+	}
+}
+
+// -------------------------- SUBTREE 1: TORQUE --------------------------------
+
+reactiveclass TorqueController(20) {
+	knownrebecs {
+		ConverterDriver converter;
+		ScadaLogger scada;           // OPTIONAL
+	}
+	statevars {
+		int rpm;
+		int power;
+		int demand;
+	}
+	TorqueController() {
+		rpm = 2;
+		power = 0;
+		demand = 0;
+		self.tick() after(2);
+	}
+	msgsrv newSpeed(int s) {
+		rpm = s;
+	}
+	msgsrv newPower(int p) {
+		power = p;
+	}
+	msgsrv tick() {
+		demand = rpm;                // below rated: torque tracks rotor speed
+		if (power > 2) {
+			demand = demand - 1;     // at rated power, stop asking for more
+		}
+		if (demand < 0) {
+			demand = 0;
+		}
+		if (demand > 3) {
+			demand = 3;
+		}
+		converter.setTorque(demand);
+		scada.logTorque(demand);     // OPTIONAL
+		self.tick() after(4);
+	}
+}
+
+reactiveclass ConverterDriver(20) {
+	knownrebecs {
+		Generator generator;
+	}
+	statevars {
+		boolean enabled;
+		int torque;
+	}
+	ConverterDriver() {
+		enabled = true;
+		torque = 0;
+	}
+	msgsrv setTorque(int t) {
+		torque = t;
+		if (enabled == true) {
+			generator.applyTorque(torque);
+		}
+	}
+	msgsrv openBreaker() {           // the supervisor reaches in here
+		enabled = false;
+		torque = 0;
+		generator.applyTorque(0);
+	}
+	msgsrv reconnect() {
+		enabled = true;
+	}
+}
+
+// --------------------------- SUBTREE 2: PITCH --------------------------------
+
+reactiveclass PitchController(20) {
+	knownrebecs {
+		PitchRateLimiter limiter;
+	}
+	statevars {
+		int rpm;
+		int wind;
+		int demand;
+	}
+	PitchController() {
+		rpm = 2;
+		wind = 2;
+		demand = 0;
+		self.tick() after(3);
+	}
+	msgsrv newSpeed(int s) {
+		rpm = s;
+	}
+	msgsrv newWind(int w) {
+		wind = w;
+	}
+	msgsrv tick() {
+		if (wind > 3) {
+			demand = wind - 3;       // above rated: feather to shed power
+		} else {
+			demand = 0;
+		}
+		if (rpm > 3) {
+			demand = demand + 1;     // over-speed: feather further
+		}
+		if (demand > 3) {
+			demand = 3;
+		}
+		limiter.newPitchDemand(demand);
+		self.tick() after(8);
+	}
+}
+
+reactiveclass PitchRateLimiter(20) {     // blades cannot slew instantly
+	knownrebecs {
+		PitchActuator actuator;
+	}
+	statevars {
+		int angle;
+	}
+	PitchRateLimiter() {
+		angle = 0;
+	}
+	msgsrv newPitchDemand(int d) {
+		if (d > angle) {
+			angle = angle + 1;
+		} else if (d < angle) {
+			angle = angle - 1;
+		}
+		actuator.setPitch(angle);
+	}
+}
+
+reactiveclass PitchActuator(20) {
+	knownrebecs {
+		Blades blades;
+	}
+	statevars {
+		boolean feathered;
+		int angle;
+	}
+	PitchActuator() {
+		feathered = false;
+		angle = 0;
+	}
+	msgsrv setPitch(int a) {
+		if (feathered == false) {
+			angle = a;
+			blades.setAngle(angle);
+		}
+	}
+	msgsrv feather() {               // the supervisor reaches in here
+		feathered = true;
+		angle = 3;
+		blades.setAngle(angle);
+	}
+	msgsrv restorePitch() {
+		feathered = false;
+	}
+}
+
+// ---------------------------- SUBTREE 3: YAW ---------------------------------
+
+reactiveclass YawController(20) {
+	knownrebecs {
+		YawDrive drive;
+	}
+	statevars {
+		int rpm;
+		int wanted;
+		int position;
+		int command;
+	}
+	YawController() {
+		rpm = 2;
+		wanted = 0;
+		position = 0;
+		command = 2;                 // 2 = hold
+		self.tick() after(9);
+	}
+	msgsrv newSpeed(int s) {
+		rpm = s;
+	}
+	msgsrv newDirection(int d) {
+		wanted = d;
+	}
+	msgsrv tick() {
+		if (rpm < 3) {
+			command = 2;             // below cut-in the yaw drive is inhibited
+		} else if (wanted > position) {
+			command = 1;
+			position = position + 1;
+		} else if (wanted < position) {
+			command = 0;
+			position = position - 1;
+		} else {
+			command = 2;
+		}
+		drive.yaw(command);
+		self.tick() after(24);
+	}
+}
+
+reactiveclass YawDrive(20) {
+	knownrebecs {
+		Nacelle nacelle;
+	}
+	statevars {
+		int command;
+	}
+	YawDrive() {
+		command = 2;
+	}
+	msgsrv yaw(int c) {
+		command = c;
+		nacelle.rotate(command);
+	}
+}
+
+// -------------------------- SUBTREE 4: SAFETY --------------------------------
+
+reactiveclass SupervisoryControl(20) {
+	knownrebecs {
+		ShutdownSequencer sequencer;
+	}
+	statevars {
+		int rpm;
+		int wind;
+		int power;
+		int vibration;
+	}
+	SupervisoryControl() {
+		rpm = 2;
+		wind = 2;
+		power = 0;
+		vibration = 1;
+		self.tick() after(13);
+	}
+	msgsrv newSpeed(int s) {
+		rpm = s;
+	}
+	msgsrv newWind(int w) {
+		wind = w;
+	}
+	msgsrv newPower(int p) {
+		power = p;
+	}
+	msgsrv newVibration(int v) {
+		vibration = v;
+	}
+	msgsrv tick() {
+		if (vibration > 3 || wind > 4) {
+			sequencer.trip();
+		} else {
+			sequencer.clear();
+		}
+		self.tick() after(16);
+	}
+}
+
+reactiveclass ShutdownSequencer(20) {    // the ONE module that crosses subtrees
+	knownrebecs {
+		PitchActuator pitchActuator;
+		ConverterDriver converter;
+		Brake brake;
+		ScadaLogger scada;           // OPTIONAL
+	}
+	statevars {
+		boolean tripped;
+	}
+	ShutdownSequencer() {
+		tripped = false;
+	}
+	msgsrv trip() {
+		if (tripped == false) {
+			tripped = true;
+			pitchActuator.feather();
+			converter.openBreaker();
+			brake.applyBrake();
+			scada.logEvent(1);       // OPTIONAL
+		}
+	}
+	msgsrv clear() {
+		if (tripped == true) {
+			tripped = false;
+			pitchActuator.restorePitch();
+			converter.reconnect();
+			brake.releaseBrake();
+		}
+	}
+}
+
+// ------------------------- THE SHARED SENSOR FRONT END -----------------------
+
+reactiveclass RotorSpeedSensor(20) {     // feeds FIVE components
+	knownrebecs {
+		TorqueController torque;
+		PitchController pitch;
+		YawController yaw;
+		SupervisoryControl supervisor;
+		ScadaLogger scada;           // OPTIONAL
+	}
+	statevars {
+		int rpm;
+	}
+	RotorSpeedSensor() {
+		rpm = 2;
+		self.tick();
+	}
+	msgsrv tick() {
+		if (rpm == 5) {              // 2,3,4,5 - four values, so the cycle does
+			rpm = 2;                 // not phase-lock with the 24-unit yaw loop
+		} else {
+			rpm = rpm + 1;
+		}
+		torque.newSpeed(rpm);
+		pitch.newSpeed(rpm);
+		yaw.newSpeed(rpm);
+		supervisor.newSpeed(rpm);
+		scada.logSpeed(rpm);         // OPTIONAL
+		self.tick() after(4);
+	}
+}
+
+reactiveclass PowerSensor(20) {
+	knownrebecs {
+		TorqueController torque;
+		SupervisoryControl supervisor;
+		ScadaLogger scada;           // OPTIONAL
+	}
+	statevars {
+		int power;
+	}
+	PowerSensor() {
+		power = 0;
+		self.tick() after(1);
+	}
+	msgsrv tick() {
+		if (power == 3) {
+			power = 0;
+		} else {
+			power = power + 1;
+		}
+		torque.newPower(power);
+		supervisor.newPower(power);
+		scada.logPower(power);       // OPTIONAL
+		self.tick() after(8);
+	}
+}
+
+reactiveclass Anemometer(20) {
+	knownrebecs {
+		PitchController pitch;
+		YawController yaw;
+		SupervisoryControl supervisor;
+	}
+	statevars {
+		int wind;
+		int direction;
+	}
+	Anemometer() {
+		wind = 2;
+		direction = 0;
+		self.tick() after(5);
+	}
+	msgsrv tick() {
+		wind = ?(2, 5);              // 5 is a storm - above the cut-out limit
+		if (direction == 2) {
+			direction = 0;
+		} else {
+			direction = direction + 1;
+		}
+		pitch.newWind(wind);
+		yaw.newDirection(direction);
+		supervisor.newWind(wind);
+		self.tick() after(12);
+	}
+}
+
+reactiveclass VibrationSensor(20) {
+	knownrebecs {
+		SupervisoryControl supervisor;
+		ConditionMonitor monitor;    // OPTIONAL
+	}
+	statevars {
+		int level;
+	}
+	VibrationSensor() {
+		level = 1;
+		self.tick() after(7);
+	}
+	msgsrv tick() {
+		level = ?(1, 4);             // 4 is above the trip threshold
+		supervisor.newVibration(level);
+		monitor.logVibration(level); // OPTIONAL
+		self.tick() after(16);
+	}
+}
+
+// ----------------------------- OPTIONAL MODULE -------------------------------
+reactiveclass ScadaLogger(20) {          // the wind-farm SCADA link
+	statevars {
+		int lastSpeed;
+		int lastPower;
+		int lastTorque;
+		int lastEvent;
+	}
+	ScadaLogger() {
+		lastSpeed = 0;
+		lastPower = 0;
+		lastTorque = 0;
+		lastEvent = 0;
+	}
+	msgsrv logSpeed(int s) {
+		lastSpeed = s;
+	}
+	msgsrv logPower(int p) {
+		lastPower = p;
+	}
+	msgsrv logTorque(int t) {
+		lastTorque = t;
+	}
+	msgsrv logEvent(int e) {
+		lastEvent = e;
+	}
+}
+
+reactiveclass ConditionMonitor(20) {     // vibration trending, retrofitted
+	statevars {
+		int lastLevel;
+	}
+	ConditionMonitor() {
+		lastLevel = 0;
+	}
+	msgsrv logVibration(int v) {
+		lastLevel = v;
+	}
+}
+// --------------------------- END OPTIONAL MODULE -----------------------------
+
+main {
+	Generator generator():();
+	Blades blades():();
+	Nacelle nacelle():();
+	Brake brake():();
+
+	ConverterDriver converter(generator):();
+	TorqueController torque(converter, scada):();        // M: TorqueController torque(converter):();
+
+	PitchActuator pitchActuator(blades):();
+	PitchRateLimiter limiter(pitchActuator):();
+	PitchController pitch(limiter):();
+
+	YawDrive yawDrive(nacelle):();
+	YawController yaw(yawDrive):();
+
+	ShutdownSequencer sequencer(pitchActuator, converter, brake, scada):();  // M: ShutdownSequencer sequencer(pitchActuator, converter, brake):();
+	SupervisoryControl supervisor(sequencer):();
+
+	RotorSpeedSensor speedSensor(torque, pitch, yaw, supervisor, scada):();  // M: RotorSpeedSensor speedSensor(torque, pitch, yaw, supervisor):();
+	PowerSensor powerSensor(torque, supervisor, scada):();                   // M: PowerSensor powerSensor(torque, supervisor):();
+	Anemometer anemometer(pitch, yaw, supervisor):();
+	VibrationSensor vibration(supervisor, monitor):();                       // M: VibrationSensor vibration(supervisor):();
+
+	ScadaLogger scada():();          // OPTIONAL
+	ConditionMonitor monitor():();   // OPTIONAL
+}
